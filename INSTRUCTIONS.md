@@ -88,7 +88,7 @@ This stage is CPU-only (uses `sentence-transformers` for embeddings).
 
 ## Stage 2: Severity Interpolation (LLM Judge)
 
-Re-judges each prompt pair against `data/rules.jsonl` using an
+Re-judges each prompt pair against `rules.jsonl` using an
 OpenAI-compatible LLM, drops poisoned/ambiguous pairs, and fills in missing
 severity rungs via generative interpolation.
 
