@@ -1,0 +1,1018 @@
+version: "3"
+
+vars:
+  # ******************************************* #
+  #      Get Team-Specific Exclusive Nodes      #
+  # ******************************************* #
+  # team_name: '{{ .team_name | default "Creative Vision Team" }}'
+  # exclude_file: '{{ .exclude_file | default "/lustre/teams/mmai/mmai-job-setting/exclude_nodes.txt" }}'
+  # exclude: "{{ .exclude }}"
+  # nodelist: "{{ .nodelist }}"
+  # EXCLUDE_NODES:
+  #   sh: "sh setup/echo_exclude_nodes.sh -t {{ .team_name | quote }} -f {{ .exclude_file }}{{ if .exclude }} -e {{ .exclude }}{{ end }}"
+  # RESERVED_NODES:
+  #   sh: "uv run python -m setup.echo_nodelist -t {{ .team_name | quote }} -f {{ .exclude_file }}{{ if .nodelist }} -n {{ .nodelist }}{{ end }}"
+
+tasks:
+  pipeline:
+    desc: Run the T2I-Escalate pipeline locally (use from_phase=N to resume from a specific phase)
+    vars:
+      input: '{{ .input | default "data/metadata.jsonl" }}'
+      workdir: '{{ .workdir | default "data/pipeline_run" }}'
+      rules: '{{ .rules | default "data/rules.jsonl" }}'
+      hf_home: '{{ .hf_home | default "/lustre/users/${USER}/hf-cache" }}'
+      from_phase: '{{ .from_phase | default "1" }}'
+    cmds:
+      - mkdir -p {{ .hf_home | quote }} && HF_HOME={{ .hf_home | quote }} TRANSFORMERS_CACHE={{ .hf_home | quote }} uv run python run_pipeline.py --input {{ .input | quote }} --workdir {{ .workdir | quote }} --rules {{ .rules | quote }} --start-from {{ .from_phase }} {{ .CLI_ARGS }}
+
+  pipeline_gpu:
+    desc: Submit the full pipeline as a GPU job (use from_phase=N to resume from a specific phase)
+    vars:
+      input: '{{ .input | default "data/metadata.jsonl" }}'
+      workdir: '{{ .workdir | default "data/pipeline_run" }}'
+      rules: '{{ .rules | default "data/rules.jsonl" }}'
+      hf_home: '{{ .hf_home | default "/lustre/users/${USER}/hf-cache" }}'
+      cpu: '{{ .cpu | default "128" }}'
+      p: '{{ .p | default "002-partition-default" }}'
+      tag: '{{ .tag | default "latest" }}'
+      log_root: '{{ .log_root | default "./logs" }}'
+      from_phase: '{{ .from_phase | default "1" }}'
+    cmds:
+      - |
+        mkdir -p {{ .log_root }}
+        WORKDIR=$(pwd)
+        sbatch <<EOF
+        #!/bin/bash
+        #SBATCH --exclude=srdgx00095,srdgx00096,srdgx00113
+        #SBATCH --job-name=t2i_pipeline
+        #SBATCH --partition={{ .p }}
+        #SBATCH --ntasks=1
+        #SBATCH --cpus-per-task={{ .cpu }}
+        #SBATCH --gres=gpu:1
+        #SBATCH --output={{ .log_root }}/%x_%j.out
+        #SBATCH --error={{ .log_root }}/%x_%j.err
+        #SBATCH --container-image=/lustre/users/vmduc/container_cache/image_generation_pipeline:{{ .tag }}.sqsh
+        #SBATCH --container-mounts=/lustre:/lustre,/store:/store,/home:/home
+
+        cd "$WORKDIR" || { echo "Failure: Could not cd to $WORKDIR"; exit 1; }
+
+        source .venv/bin/activate
+        mkdir -p {{ .hf_home | quote }}
+        export HF_HOME={{ .hf_home | quote }}
+        export TRANSFORMERS_CACHE={{ .hf_home | quote }}
+
+        PYTHONPATH=. uv run python run_pipeline.py --input {{ .input | quote }} --workdir {{ .workdir | quote }} --rules {{ .rules | quote }} --start-from {{ .from_phase }} {{ .CLI_ARGS }}
+        EOF
+
+  phase1:
+    desc: Run Phase 1 locally
+    vars:
+      input: '{{ .input | default "data/metadata_sample.jsonl" }}'
+      output: '{{ .output | default "data/pipeline_run/metadata_phase1.jsonl" }}'
+      model: '{{ .model | default "all-MiniLM-L6-v2" }}'
+      threshold: '{{ .threshold | default "0.95" }}'
+      batch_size: '{{ .batch_size | default "512" }}'
+      hf_home: '{{ .hf_home | default "/lustre/users/${USER}/hf-cache" }}'
+    cmds:
+      - mkdir -p {{ .hf_home | quote }} && HF_HOME={{ .hf_home | quote }} TRANSFORMERS_CACHE={{ .hf_home | quote }} uv run python -m pipeline.phase1_filter --input {{ .input | quote }} --output {{ .output | quote }} --model {{ .model | quote }} --threshold {{ .threshold | quote }} --batch-size {{ .batch_size | quote }} {{ .CLI_ARGS }}
+
+  phase2:
+    desc: Run Phase 2 locally
+    vars:
+      input: '{{ .input | default "data/pipeline_run/metadata_phase1.jsonl" }}'
+      output: '{{ .output | default "data/pipeline_run/metadata_phase2.jsonl" }}'
+      rules: '{{ .rules | default "data/rules.jsonl" }}'
+      model: '{{ .model | default "Qwen/Qwen2.5-7B-Instruct" }}'
+      backend: '{{ .backend | default "local" }}'
+      embed_model: '{{ .embed_model | default "all-MiniLM-L6-v2" }}'
+      base_url: '{{ .base_url | default "" }}'
+      concurrency: '{{ .concurrency | default "8" }}'
+      max_retries: '{{ .max_retries | default "3" }}'
+      hf_home: '{{ .hf_home | default "/lustre/users/${USER}/hf-cache" }}'
+    cmds:
+      - mkdir -p {{ .hf_home | quote }} && HF_HOME={{ .hf_home | quote }} TRANSFORMERS_CACHE={{ .hf_home | quote }} uv run python -m pipeline.phase2_filter --input {{ .input | quote }} --output {{ .output | quote }} --rules {{ .rules | quote }} --model {{ .model | quote }} --backend {{ .backend | quote }} --embed-model {{ .embed_model | quote }} {{ if .base_url }}--base-url {{ .base_url | quote }} {{ end }}--concurrency {{ .concurrency | quote }} --max-retries {{ .max_retries | quote }} {{ .CLI_ARGS }}
+
+  phase2_gpu:
+    desc: Submit Phase 2 as a GPU job
+    vars:
+      input: '{{ .input | default "data/pipeline_run/metadata_phase1.jsonl" }}'
+      output: '{{ .output | default "data/pipeline_run/metadata_phase2.jsonl" }}'
+      rules: '{{ .rules | default "data/rules.jsonl" }}'
+      model: '{{ .model | default "Qwen/Qwen2.5-7B-Instruct" }}'
+      backend: '{{ .backend | default "local" }}'
+      embed_model: '{{ .embed_model | default "all-MiniLM-L6-v2" }}'
+      base_url: '{{ .base_url | default "" }}'
+      concurrency: '{{ .concurrency | default "8" }}'
+      max_retries: '{{ .max_retries | default "3" }}'
+      hf_home: '{{ .hf_home | default "/lustre/users/${USER}/hf-cache" }}'
+      cpu: '{{ .cpu | default "128" }}'
+      p: '{{ .p | default "002-partition-default" }}'
+      tag: '{{ .tag | default "latest" }}'
+      log_root: '{{ .log_root | default "./logs" }}'
+    cmds:
+      - |
+        mkdir -p {{ .log_root }}
+        WORKDIR=$(pwd)
+        sbatch <<EOF
+        #!/bin/bash
+        #SBATCH --exclude=srdgx00095,srdgx00096,srdgx00113
+        #SBATCH --job-name=phase2_filter
+        #SBATCH --partition={{ .p }}
+        #SBATCH --ntasks=1
+        #SBATCH --cpus-per-task={{ .cpu }}
+        #SBATCH --gres=gpu:1
+        #SBATCH --output={{ .log_root }}/%x_%j.out
+        #SBATCH --error={{ .log_root }}/%x_%j.err
+        #SBATCH --container-image=/lustre/users/vmduc/container_cache/image_generation_pipeline:{{ .tag }}.sqsh
+        #SBATCH --container-mounts=/lustre:/lustre,/store:/store,/home:/home
+
+        cd "$WORKDIR" || { echo "Failure: Could not cd to $WORKDIR"; exit 1; }
+
+        source .venv/bin/activate
+        mkdir -p {{ .hf_home | quote }}
+        export HF_HOME={{ .hf_home | quote }}
+        export TRANSFORMERS_CACHE={{ .hf_home | quote }}
+
+        PYTHONPATH=. uv run python -m pipeline.phase2_filter --input {{ .input | quote }} --output {{ .output | quote }} --rules {{ .rules | quote }} --model {{ .model | quote }} --backend {{ .backend | quote }} --embed-model {{ .embed_model | quote }} {{ if .base_url }}--base-url {{ .base_url | quote }} {{ end }}--concurrency {{ .concurrency | quote }} --max-retries {{ .max_retries | quote }} {{ .CLI_ARGS }}
+        EOF
+
+  phase3:
+    desc: Run Phase 3 locally
+    vars:
+      input: '{{ .input | default "data/pipeline_run/metadata_phase2.jsonl" }}'
+      output: '{{ .output | default "data/pipeline_run/metadata_phase3.jsonl" }}'
+      rules: '{{ .rules | default "data/rules.jsonl" }}'
+      model: '{{ .model | default "Qwen/Qwen2.5-7B-Instruct" }}'
+      backend: '{{ .backend | default "local" }}'
+      base_url: '{{ .base_url | default "" }}'
+      concurrency: '{{ .concurrency | default "8" }}'
+      max_retries: '{{ .max_retries | default "3" }}'
+      hf_home: '{{ .hf_home | default "/lustre/users/${USER}/hf-cache" }}'
+    cmds:
+      - mkdir -p {{ .hf_home | quote }} && HF_HOME={{ .hf_home | quote }} TRANSFORMERS_CACHE={{ .hf_home | quote }} uv run python -m pipeline.phase3_filter --input {{ .input | quote }} --output {{ .output | quote }} --rules {{ .rules | quote }} --model {{ .model | quote }} --backend {{ .backend | quote }} {{ if .base_url }}--base-url {{ .base_url | quote }} {{ end }}--concurrency {{ .concurrency | quote }} --max-retries {{ .max_retries | quote }} {{ .CLI_ARGS }}
+
+  phase3_gpu:
+    desc: Submit Phase 3 as a GPU job
+    vars:
+      input: '{{ .input | default "data/pipeline_run/metadata_phase2.jsonl" }}'
+      output: '{{ .output | default "data/pipeline_run/metadata_phase3.jsonl" }}'
+      rules: '{{ .rules | default "data/rules.jsonl" }}'
+      model: '{{ .model | default "Qwen/Qwen2.5-7B-Instruct" }}'
+      backend: '{{ .backend | default "local" }}'
+      base_url: '{{ .base_url | default "" }}'
+      concurrency: '{{ .concurrency | default "8" }}'
+      max_retries: '{{ .max_retries | default "3" }}'
+      hf_home: '{{ .hf_home | default "/lustre/users/${USER}/hf-cache" }}'
+      cpu: '{{ .cpu | default "128" }}'
+      p: '{{ .p | default "002-partition-default" }}'
+      tag: '{{ .tag | default "latest" }}'
+      log_root: '{{ .log_root | default "./logs" }}'
+    cmds:
+      - |
+        mkdir -p {{ .log_root }}
+        WORKDIR=$(pwd)
+        sbatch <<EOF
+        #!/bin/bash
+        #SBATCH --exclude=srdgx00095,srdgx00096,srdgx00113
+        #SBATCH --job-name=phase3_filter
+        #SBATCH --partition={{ .p }}
+        #SBATCH --ntasks=1
+        #SBATCH --cpus-per-task={{ .cpu }}
+        #SBATCH --gres=gpu:1
+        #SBATCH --output={{ .log_root }}/%x_%j.out
+        #SBATCH --error={{ .log_root }}/%x_%j.err
+        #SBATCH --container-image=/lustre/users/vmduc/container_cache/image_generation_pipeline:{{ .tag }}.sqsh
+        #SBATCH --container-mounts=/lustre:/lustre,/store:/store,/home:/home
+
+        cd "$WORKDIR" || { echo "Failure: Could not cd to $WORKDIR"; exit 1; }
+
+        source .venv/bin/activate
+        mkdir -p {{ .hf_home | quote }}
+        export HF_HOME={{ .hf_home | quote }}
+        export TRANSFORMERS_CACHE={{ .hf_home | quote }}
+
+        PYTHONPATH=. uv run python -m pipeline.phase3_filter --input {{ .input | quote }} --output {{ .output | quote }} --rules {{ .rules | quote }} --model {{ .model | quote }} --backend {{ .backend | quote }} {{ if .base_url }}--base-url {{ .base_url | quote }} {{ end }}--concurrency {{ .concurrency | quote }} --max-retries {{ .max_retries | quote }} {{ .CLI_ARGS }}
+        EOF
+
+  phase4:
+    desc: Run Phase 4 locally
+    vars:
+      input: '{{ .input | default "data/pipeline_run/metadata_phase3.jsonl" }}'
+      output: '{{ .output | default "data/pipeline_run/metadata_phase4.jsonl" }}'
+      rules: '{{ .rules | default "data/rules.jsonl" }}'
+      model: '{{ .model | default "Qwen/Qwen3-VL-8B-Thinking" }}'
+      backend: '{{ .backend | default "local" }}'
+      max_side: '{{ .max_side | default "512" }}'
+      min_score_gap: '{{ .min_score_gap | default "0.4" }}'
+      project_root: '{{ .project_root | default "." }}'
+      base_url: '{{ .base_url | default "" }}'
+      hf_home: '{{ .hf_home | default "/lustre/users/${USER}/hf-cache" }}'
+    cmds:
+      - mkdir -p {{ .hf_home | quote }} && HF_HOME={{ .hf_home | quote }} TRANSFORMERS_CACHE={{ .hf_home | quote }} uv run python -m pipeline.phase4_filter --input {{ .input | quote }} --output {{ .output | quote }} --rules {{ .rules | quote }} --model {{ .model | quote }} --backend {{ .backend | quote }} {{ if .base_url }}--base-url {{ .base_url | quote }} {{ end }}--max-side {{ .max_side | quote }} --min-score-gap {{ .min_score_gap | quote }} --project-root {{ .project_root | quote }} {{ .CLI_ARGS }}
+
+  phase4_gpu:
+    desc: Submit Phase 4 as a GPU job
+    vars:
+      input: '{{ .input | default "data/pipeline_run/metadata_phase3.jsonl" }}'
+      output: '{{ .output | default "data/pipeline_run/metadata_phase4.jsonl" }}'
+      rules: '{{ .rules | default "data/rules.jsonl" }}'
+      model: '{{ .model | default "Qwen/Qwen3-VL-8B-Thinking" }}'
+      backend: '{{ .backend | default "local" }}'
+      max_side: '{{ .max_side | default "512" }}'
+      min_score_gap: '{{ .min_score_gap | default "0.4" }}'
+      project_root: '{{ .project_root | default "." }}'
+      base_url: '{{ .base_url | default "" }}'
+      hf_home: '{{ .hf_home | default "/lustre/users/${USER}/hf-cache" }}'
+      cpu: '{{ .cpu | default "128" }}'
+      p: '{{ .p | default "002-partition-default" }}'
+      tag: '{{ .tag | default "latest" }}'
+      log_root: '{{ .log_root | default "./logs" }}'
+    cmds:
+      - |
+        mkdir -p {{ .log_root }}
+        WORKDIR=$(pwd)
+        sbatch <<EOF
+        #!/bin/bash
+        #SBATCH --exclude=srdgx00095,srdgx00096,srdgx00113
+        #SBATCH --job-name=phase4_filter
+        #SBATCH --partition={{ .p }}
+        #SBATCH --ntasks=1
+        #SBATCH --cpus-per-task={{ .cpu }}
+        #SBATCH --gres=gpu:1
+        #SBATCH --output={{ .log_root }}/%x_%j.out
+        #SBATCH --error={{ .log_root }}/%x_%j.err
+        #SBATCH --container-image=/lustre/users/vmduc/container_cache/image_generation_pipeline:{{ .tag }}.sqsh
+        #SBATCH --container-mounts=/lustre:/lustre,/store:/store,/home:/home
+
+        cd "$WORKDIR" || { echo "Failure: Could not cd to $WORKDIR"; exit 1; }
+
+        source .venv/bin/activate
+        mkdir -p {{ .hf_home | quote }}
+        export HF_HOME={{ .hf_home | quote }}
+        export TRANSFORMERS_CACHE={{ .hf_home | quote }}
+
+        PYTHONPATH=. uv run python -m pipeline.phase4_filter --input {{ .input | quote }} --output {{ .output | quote }} --rules {{ .rules | quote }} --model {{ .model | quote }} --backend {{ .backend | quote }} {{ if .base_url }}--base-url {{ .base_url | quote }} {{ end }}--max-side {{ .max_side | quote }} --min-score-gap {{ .min_score_gap | quote }} --project-root {{ .project_root | quote }} {{ .CLI_ARGS }}
+        EOF
+
+  phase5:
+    desc: Run Phase 5 locally
+    vars:
+      input: '{{ .input | default "data/pipeline_run/metadata_phase4.jsonl" }}'
+      output: '{{ .output | default "data/pipeline_run/metadata_phase5.jsonl" }}'
+      max_per_category: '{{ .max_per_category | default "0" }}'
+      max_bias_ratio: '{{ .max_bias_ratio | default "0.40" }}'
+      seed: '{{ .seed | default "42" }}'
+    cmds:
+      - uv run python -m pipeline.phase5_filter --input {{ .input | quote }} --output {{ .output | quote }} --max-per-category {{ .max_per_category | quote }} --max-bias-ratio {{ .max_bias_ratio | quote }} --seed {{ .seed | quote }} {{ .CLI_ARGS }}
+
+  eval:
+    desc: Run intrinsic dataset evaluation (no GPU required)
+    vars:
+      dataset: '{{ .dataset | default "data/pipeline_run/metadata_phase5.jsonl" }}'
+      run_summary: '{{ .run_summary | default "data/pipeline_run/run_summary.json" }}'
+      diversity_report: '{{ .diversity_report | default "data/pipeline_run/metadata_phase5_diversity_report.json" }}'
+      output_dir: '{{ .output_dir | default "data/eval_results" }}'
+    cmds:
+      - uv run python -m eval.run_eval --dataset {{ .dataset | quote }} --run-summary {{ .run_summary | quote }} --diversity-report {{ .diversity_report | quote }} --output-dir {{ .output_dir | quote }} {{ .CLI_ARGS }}
+
+  eval_gpu:
+    desc: Run full evaluation including T2I benchmarking (requires GPU)
+    vars:
+      dataset: '{{ .dataset | default "release/v1.0/metadata_subset.jsonl" }}'
+      run_summary: '{{ .run_summary | default "" }}'
+      diversity_report: '{{ .diversity_report | default "" }}'
+      output_dir: '{{ .output_dir | default "release/v1.0/eval_results/t2i_models" }}'
+      t2i_models: '{{ .t2i_models | default "sd14 sd21 pixart_alpha cogview4 janus_pro hidream" }}'
+      hf_home: '{{ .hf_home | default "/lustre/users/${USER}/hf-cache" }}'
+      cpu: '{{ .cpu | default "128" }}'
+      p: '{{ .p | default "002-partition-default" }}'
+      tag: '{{ .tag | default "latest" }}'
+      log_root: '{{ .log_root | default "./logs" }}'
+    cmds:
+      - |
+        mkdir -p {{ .log_root }}
+        WORKDIR=$(pwd)
+        sbatch <<EOF
+        #!/bin/bash
+        #SBATCH --exclude=srdgx00095,srdgx00096,srdgx00113
+        #SBATCH --job-name=t2i_eval
+        #SBATCH --partition={{ .p }}
+        #SBATCH --ntasks=1
+        #SBATCH --cpus-per-task={{ .cpu }}
+        #SBATCH --gres=gpu:1
+        #SBATCH --output={{ .log_root }}/%x_%j.out
+        #SBATCH --error={{ .log_root }}/%x_%j.err
+        #SBATCH --container-image=/lustre/users/vmduc/container_cache/image_generation_pipeline:{{ .tag }}.sqsh
+        #SBATCH --container-mounts=/lustre:/lustre,/store:/store,/home:/home
+
+        cd "$WORKDIR" || { echo "Failure: Could not cd to $WORKDIR"; exit 1; }
+
+        source .venv/bin/activate
+        mkdir -p {{ .hf_home | quote }}
+        export HF_HOME={{ .hf_home | quote }}
+        export TRANSFORMERS_CACHE={{ .hf_home | quote }}
+
+        PYTHONPATH=. uv run python -m eval.run_eval --dataset {{ .dataset | quote }} {{ if .run_summary }}--run-summary {{ .run_summary | quote }}{{ end }} {{ if .diversity_report }}--diversity-report {{ .diversity_report | quote }}{{ end }} --output-dir {{ .output_dir | quote }} --eval-t2i --t2i-models {{ .t2i_models }} --image-root release/v1.0/ --plots {{ .CLI_ARGS }}
+        EOF
+
+  eval_intrinsic:
+    desc: Run CPU-only intrinsic eval on the release subset (no GPU needed, ~5 min)
+    vars:
+      dataset: '{{ .dataset | default "release/v1.0/metadata_subset.jsonl" }}'
+      output_dir: '{{ .output_dir | default "release/v1.0/eval_results" }}'
+    cmds:
+      - uv run python -m eval.run_eval --dataset {{ .dataset | quote }} --output-dir {{ .output_dir | quote }} {{ .CLI_ARGS }}
+
+  eval_filter_gpu:
+    desc: Run safety filter evaluation on pre-generated images (requires GPU, ~4-8h)
+    vars:
+      dataset: '{{ .dataset | default "release/v1.0/metadata_subset.jsonl" }}'
+      output_dir: '{{ .output_dir | default "release/v1.0/eval_results/filters" }}'
+      image_root: '{{ .image_root | default "release/v1.0/" }}'
+      filters: '{{ .filters | default "clip_nsfw q16 sd_filter llava_guard internvl" }}'
+      hf_home: '{{ .hf_home | default "/lustre/users/${USER}/hf-cache" }}'
+      cpu: '{{ .cpu | default "128" }}'
+      p: '{{ .p | default "002-partition-default" }}'
+      tag: '{{ .tag | default "latest" }}'
+      log_root: '{{ .log_root | default "./logs" }}'
+    cmds:
+      - |
+        mkdir -p {{ .log_root }}
+        WORKDIR=$(pwd)
+        sbatch <<EOF
+        #!/bin/bash
+        #SBATCH --exclude=srdgx00095,srdgx00096,srdgx00113
+        #SBATCH --job-name=filter_eval
+        #SBATCH --partition={{ .p }}
+        #SBATCH --ntasks=1
+        #SBATCH --cpus-per-task={{ .cpu }}
+        #SBATCH --gres=gpu:1
+        #SBATCH --output={{ .log_root }}/%x_%j.out
+        #SBATCH --error={{ .log_root }}/%x_%j.err
+        #SBATCH --container-image=/lustre/users/vmduc/container_cache/image_generation_pipeline:{{ .tag }}.sqsh
+        #SBATCH --container-mounts=/lustre:/lustre,/store:/store,/home:/home
+
+        cd "$WORKDIR" || { echo "Failure: Could not cd to $WORKDIR"; exit 1; }
+
+        source .venv/bin/activate
+        mkdir -p {{ .hf_home | quote }}
+        export HF_HOME={{ .hf_home | quote }}
+        export TRANSFORMERS_CACHE={{ .hf_home | quote }}
+
+        PYTHONPATH=. uv run python -m eval.run_eval \
+          --dataset {{ .dataset | quote }} \
+          --output-dir {{ .output_dir | quote }} \
+          --eval-filters \
+          --safety-filters {{ .filters }} \
+          --image-root {{ .image_root | quote }} \
+          {{ .CLI_ARGS }}
+        EOF
+
+  eval_test:
+    desc: Run the eval module automated tests
+    cmds:
+      - uv run python tests/eval_test.py
+
+  generate_srun:
+    vars:
+      nproc: '{{ .nproc | default "1" }}'
+      cpu: '{{ .cpu | default "128" }}'
+      p: '{{ .p | default "002-partition-default" }}'
+      tag: '{{ .tag | default "latest" }}'
+      log_root: '{{ .log_root | default "./logs" }}'
+    cmds:
+      - |
+        srun \
+          --job-name=data_generate \
+          --gres=gpu:1 \
+          --container-mounts=/lustre:/lustre,/store:/store,/home:/home \
+          --container-image=/lustre/users/vmduc/container_cache/image_generation_pipeline:{{ .tag }}.sqsh \
+          --partition="002-partition-default" \
+          --output={{ .log_root }}/%x_%j.out \
+          --error={{ .log_root }}/%x_%j.err \
+          bash -c "cd ${PWD} && source .venv/bin/activate && \
+            PYTHONPATH=. uv run python generate_data.py {{.CLI_ARGS}}"
+
+  eval_exp:
+    desc: Run CPU-only NeurIPS experiments (exp1 + exp9, no GPU required)
+    vars:
+      dataset: '{{ .dataset | default "data/pipeline_run/metadata_phase5.jsonl" }}'
+      output_dir: '{{ .output_dir | default "data/eval_results/experiments" }}'
+    cmds:
+      - uv run python -m eval.experiments.run_experiments --dataset {{ .dataset | quote }} --output-dir {{ .output_dir | quote }} --experiments exp1 exp9 {{ .CLI_ARGS }}
+
+  eval_exp_gpu:
+    desc: Run all NeurIPS experiments (requires GPU — submits as SLURM job)
+    vars:
+      dataset: '{{ .dataset | default "release/v1.0/metadata_subset.jsonl" }}'
+      output_dir: '{{ .output_dir | default "release/v1.0/eval_results/experiments" }}'
+      t2i_models: '{{ .t2i_models | default "sd14 sd21 pixart_alpha cogview4 janus_pro hidream" }}'
+      hf_home: '{{ .hf_home | default "/lustre/users/${USER}/hf-cache" }}'
+      cpu: '{{ .cpu | default "128" }}'
+      p: '{{ .p | default "002-partition-default" }}'
+      tag: '{{ .tag | default "latest" }}'
+      log_root: '{{ .log_root | default "./logs" }}'
+    cmds:
+      - |
+        mkdir -p {{ .log_root }}
+        WORKDIR=$(pwd)
+        sbatch <<EOF
+        #!/bin/bash
+        #SBATCH --exclude=srdgx00095,srdgx00096,srdgx00113
+        #SBATCH --job-name=t2i_exp
+        #SBATCH --partition={{ .p }}
+        #SBATCH --ntasks=1
+        #SBATCH --cpus-per-task={{ .cpu }}
+        #SBATCH --gres=gpu:1
+        #SBATCH --output={{ .log_root }}/%x_%j.out
+        #SBATCH --error={{ .log_root }}/%x_%j.err
+        #SBATCH --container-image=/lustre/users/vmduc/container_cache/image_generation_pipeline:{{ .tag }}.sqsh
+        #SBATCH --container-mounts=/lustre:/lustre,/store:/store,/home:/home
+
+        cd "$WORKDIR" || { echo "Failure: Could not cd to $WORKDIR"; exit 1; }
+
+        source .venv/bin/activate
+        mkdir -p {{ .hf_home | quote }}
+        export HF_HOME={{ .hf_home | quote }}
+        export TRANSFORMERS_CACHE={{ .hf_home | quote }}
+
+        PYTHONPATH=. uv run python -m eval.experiments.run_experiments --dataset {{ .dataset | quote }} --output-dir {{ .output_dir | quote }} --experiments exp1 exp2 exp3 exp4 exp5 exp6 exp8 exp9 --t2i-models {{ .t2i_models }} --plots {{ .CLI_ARGS }}
+        EOF
+
+  eval_perplexity:
+    desc: Compute prompt perplexity with GPT-2 — CPU only, ~5-10 min
+    vars:
+      dataset:    '{{ .dataset    | default "release/v1.0/metadata_subset.jsonl" }}'
+      output_dir: '{{ .output_dir | default "release/v1.0/eval_results/perplexity" }}'
+      model:      '{{ .model      | default "gpt2" }}'
+    cmds:
+      - uv run python -m eval.run_eval --dataset {{ .dataset | quote }} --output-dir {{ .output_dir | quote }} --eval-perplexity --ppl-model {{ .model | quote }} --no-embed {{ .CLI_ARGS }}
+
+  attack_eval:
+    desc: Run attack ASR evaluation using pre-scored images — CPU only, ~1 min
+    vars:
+      dataset:    '{{ .dataset    | default "release/v1.0/metadata_subset.jsonl" }}'
+      output_dir: '{{ .output_dir | default "release/v1.0/eval_results/attack" }}'
+    cmds:
+      - uv run python -m eval.run_eval --dataset {{ .dataset | quote }} --output-dir {{ .output_dir | quote }} --eval-attack {{ .CLI_ARGS }}
+
+  attack_eval_gpu:
+    desc: Run attack ASR evaluation with image filter classifiers (requires GPU, ~1-2h)
+    vars:
+      dataset:    '{{ .dataset    | default "release/v1.0/metadata_subset.jsonl" }}'
+      output_dir: '{{ .output_dir | default "release/v1.0/eval_results/attack" }}'
+      image_root: '{{ .image_root | default "release/v1.0/" }}'
+      hf_home:    '{{ .hf_home    | default "/lustre/users/${USER}/hf-cache" }}'
+      cpu:        '{{ .cpu        | default "128" }}'
+      p:          '{{ .p          | default "002-partition-default" }}'
+      tag:        '{{ .tag        | default "latest" }}'
+      log_root:   '{{ .log_root   | default "./logs" }}'
+    cmds:
+      - |
+        mkdir -p {{ .log_root }}
+        WORKDIR=$(pwd)
+        sbatch <<EOF
+        #!/bin/bash
+        #SBATCH --exclude=srdgx00095,srdgx00096,srdgx00113
+        #SBATCH --job-name=attack_eval
+        #SBATCH --partition={{ .p }}
+        #SBATCH --ntasks=1
+        #SBATCH --cpus-per-task={{ .cpu }}
+        #SBATCH --gres=gpu:1
+        #SBATCH --output={{ .log_root }}/%x_%j.out
+        #SBATCH --error={{ .log_root }}/%x_%j.err
+        #SBATCH --container-image=/lustre/users/vmduc/container_cache/image_generation_pipeline:{{ .tag }}.sqsh
+        #SBATCH --container-mounts=/lustre:/lustre,/store:/store,/home:/home
+
+        cd "$WORKDIR" || { echo "Failure: Could not cd to $WORKDIR"; exit 1; }
+
+        source .venv/bin/activate
+        mkdir -p {{ .hf_home | quote }}
+        export HF_HOME={{ .hf_home | quote }}
+        export TRANSFORMERS_CACHE={{ .hf_home | quote }}
+
+        PYTHONPATH=. uv run python -m eval.run_eval \
+          --dataset {{ .dataset | quote }} \
+          --output-dir {{ .output_dir | quote }} \
+          --eval-attack \
+          --attack-with-filters \
+          --image-root {{ .image_root | quote }} \
+          {{ .CLI_ARGS }}
+        EOF
+
+  generate_seeds_gpu:
+    desc: "Stage 0: Generate safe seed prompts per category (causal LLM, ~1-2h GPU)"
+    vars:
+      output:      '{{ .output      | default "data/seeds.jsonl" }}'
+      model:       '{{ .model       | default "mistral" }}'
+      samples:     '{{ .samples     | default "50" }}'
+      categories:  '{{ .categories  | default "" }}'
+      hf_home:     '{{ .hf_home     | default "/lustre/users/${USER}/hf-cache" }}'
+      cpu:         '{{ .cpu         | default "64" }}'
+      p:           '{{ .p           | default "002-partition-default" }}'
+      tag:         '{{ .tag         | default "latest" }}'
+      log_root:    '{{ .log_root    | default "./logs" }}'
+    cmds:
+      - |
+        mkdir -p {{ .log_root }}
+        WORKDIR=$(pwd)
+        sbatch <<EOF
+        #!/bin/bash
+        #SBATCH --exclude=srdgx00095,srdgx00096,srdgx00113
+        #SBATCH --job-name=gen_seeds
+        #SBATCH --partition={{ .p }}
+        #SBATCH --ntasks=1
+        #SBATCH --cpus-per-task={{ .cpu }}
+        #SBATCH --gres=gpu:1
+        #SBATCH --output={{ .log_root }}/%x_%j.out
+        #SBATCH --error={{ .log_root }}/%x_%j.err
+        #SBATCH --container-image=/lustre/users/vmduc/container_cache/image_generation_pipeline:{{ .tag }}.sqsh
+        #SBATCH --container-mounts=/lustre:/lustre,/store:/store,/home:/home
+
+        cd "$WORKDIR" || { echo "Failure: Could not cd to $WORKDIR"; exit 1; }
+
+        mkdir -p {{ .hf_home | quote }}
+        export HF_HOME={{ .hf_home | quote }}
+        export TRANSFORMERS_CACHE={{ .hf_home | quote }}
+
+        source .venv/bin/activate
+        python -m safegrad.pipeline.stage0_seed_generation \
+          --output     {{ .output | quote }} \
+          --model      {{ .model | quote }} \
+          --samples    {{ .samples }} \
+          {{ if .categories }}--categories {{ .categories }}{{ end }} \
+          {{ .CLI_ARGS }}
+        EOF
+
+  generate_explanations:
+    desc: Generate natural-language VLM explanations for rung images (LLaVA-NeXT, ~5-8h GPU)
+    vars:
+      input:    '{{ .input    | default "release/v1.0/metadata_subset.jsonl" }}'
+      output:   '{{ .output   | default "release/v1.0/metadata_subset.jsonl" }}'
+      isg_path: '{{ .isg_path | default "/lustre/users/vmduc/Projects/safety_image_data_generation" }}'
+      hf_home:  '{{ .hf_home  | default "/lustre/users/${USER}/hf-cache" }}'
+      cpu:      '{{ .cpu      | default "64" }}'
+      p:        '{{ .p        | default "002-partition-default" }}'
+      tag:      '{{ .tag      | default "latest" }}'
+      log_root: '{{ .log_root | default "./logs" }}'
+    cmds:
+      - |
+        mkdir -p {{ .log_root }}
+        WORKDIR=$(pwd)
+        ISG_PYTHON="{{ .isg_path }}/.venv/bin/python"
+        sbatch <<EOF
+        #!/bin/bash
+        #SBATCH --exclude=srdgx00095,srdgx00096,srdgx00113
+        #SBATCH --job-name=gen_explanations
+        #SBATCH --partition={{ .p }}
+        #SBATCH --ntasks=1
+        #SBATCH --cpus-per-task={{ .cpu }}
+        #SBATCH --gres=gpu:1
+        #SBATCH --output={{ .log_root }}/%x_%j.out
+        #SBATCH --error={{ .log_root }}/%x_%j.err
+        #SBATCH --container-image=/lustre/users/vmduc/container_cache/image_generation_pipeline:{{ .tag }}.sqsh
+        #SBATCH --container-mounts=/lustre:/lustre,/store:/store,/home:/home
+
+        cd "$WORKDIR" || { echo "Failure: Could not cd to $WORKDIR"; exit 1; }
+
+        mkdir -p {{ .hf_home | quote }}
+        export HF_HOME={{ .hf_home | quote }}
+        export TRANSFORMERS_CACHE={{ .hf_home | quote }}
+
+        $ISG_PYTHON scripts/generate_explanations.py \
+          --input      {{ .input | quote }} \
+          --output     {{ .output | quote }} \
+          --image-root release/v1.0/ \
+          --isg-path   {{ .isg_path | quote }} \
+          --checkpoint-every 50 {{ .CLI_ARGS }}
+        EOF
+
+  defense_eval_gpu:
+    desc: Run defense method evaluation (requires GPU, ~3-6h)
+    vars:
+      dataset: '{{ .dataset | default "release/v1.0/metadata_subset.jsonl" }}'
+      output_dir: '{{ .output_dir | default "release/v1.0/eval_results/defense" }}'
+      t2i_model: '{{ .t2i_model | default "sd14" }}'
+      hf_home: '{{ .hf_home | default "/lustre/users/${USER}/hf-cache" }}'
+      cpu: '{{ .cpu | default "128" }}'
+      p: '{{ .p | default "002-partition-default" }}'
+      tag: '{{ .tag | default "latest" }}'
+      log_root: '{{ .log_root | default "./logs" }}'
+    cmds:
+      - |
+        mkdir -p {{ .log_root }}
+        WORKDIR=$(pwd)
+        sbatch <<EOF
+        #!/bin/bash
+        #SBATCH --exclude=srdgx00095,srdgx00096,srdgx00113
+        #SBATCH --job-name=defense_eval
+        #SBATCH --partition={{ .p }}
+        #SBATCH --ntasks=1
+        #SBATCH --cpus-per-task={{ .cpu }}
+        #SBATCH --gres=gpu:1
+        #SBATCH --output={{ .log_root }}/%x_%j.out
+        #SBATCH --error={{ .log_root }}/%x_%j.err
+        #SBATCH --container-image=/lustre/users/vmduc/container_cache/image_generation_pipeline:{{ .tag }}.sqsh
+        #SBATCH --container-mounts=/lustre:/lustre,/store:/store,/home:/home
+
+        cd "$WORKDIR" || { echo "Failure: Could not cd to $WORKDIR"; exit 1; }
+
+        source .venv/bin/activate
+        mkdir -p {{ .hf_home | quote }}
+        export HF_HOME={{ .hf_home | quote }}
+        export TRANSFORMERS_CACHE={{ .hf_home | quote }}
+
+        PYTHONPATH=. uv run python -m eval.run_eval \
+          --dataset {{ .dataset | quote }} \
+          --output-dir {{ .output_dir | quote }} \
+          --eval-defense \
+          --defense-t2i-model {{ .t2i_model }} \
+          --plots {{ .CLI_ARGS }}
+        EOF
+
+  generate_sbatch:
+    vars:
+      nproc: '{{ .nproc | default "1" }}'
+      cpu: '{{ .cpu | default "128" }}'
+      p: '{{ .p | default "002-partition-default" }}'
+      tag: '{{ .tag | default "latest" }}'
+      log_root: '{{ .log_root | default "./logs" }}'
+    cmds:
+      - |
+        mkdir -p {{ .log_root }}
+        WORKDIR=$(pwd)
+        sbatch <<EOF
+        #!/bin/bash
+        #SBATCH --exclude=srdgx00095,srdgx00096,srdgx00113
+        #SBATCH --job-name=data_generate
+        #SBATCH --partition={{ .p }}
+        #SBATCH --ntasks={{ .nproc }}
+        #SBATCH --cpus-per-task={{ .cpu }}
+        #SBATCH --gres=gpu:1
+        #SBATCH --output={{ .log_root }}/%x_%j.out
+        #SBATCH --error={{ .log_root }}/%x_%j.err
+        #SBATCH --container-image=/lustre/users/vmduc/container_cache/image_generation_pipeline:{{ .tag }}.sqsh
+        #SBATCH --container-mounts=/lustre:/lustre,/store:/store,/home:/home
+
+        cd "$WORKDIR" || { echo "Failure: Could not cd to $WORKDIR"; exit 1; }
+
+        source .venv/bin/activate
+
+        PYTHONPATH=. uv run python generate_data.py {{.CLI_ARGS}}
+        EOF
+
+
+  generate_paired_data:
+    vars:
+      nproc: '{{ .nproc | default "1" }}'
+      cpu: '{{ .cpu | default "128" }}'
+      p: '{{ .p | default "002-partition-default" }}'
+      tag: '{{ .tag | default "latest" }}'
+      log_root: '{{ .log_root | default "./logs" }}'
+    cmds:
+      - |
+        mkdir -p {{ .log_root }}
+        WORKDIR=$(pwd)
+        sbatch <<EOF
+        #!/bin/bash
+        #SBATCH --exclude=srdgx00095,srdgx00096,srdgx00113
+        #SBATCH --job-name=data_generate
+        #SBATCH --partition={{ .p }}
+        #SBATCH --ntasks={{ .nproc }}
+        #SBATCH --cpus-per-task={{ .cpu }}
+        #SBATCH --gres=gpu:1
+        #SBATCH --output={{ .log_root }}/%x_%j.out
+        #SBATCH --error={{ .log_root }}/%x_%j.err
+        #SBATCH --container-image=/lustre/users/vmduc/container_cache/image_generation_pipeline:{{ .tag }}.sqsh
+        #SBATCH --container-mounts=/lustre:/lustre,/store:/store,/home:/home
+
+        cd "$WORKDIR" || { echo "Failure: Could not cd to $WORKDIR"; exit 1; }
+
+        source .venv/bin/activate
+
+        PYTHONPATH=. uv run python generate_paired_data.py {{.CLI_ARGS}}
+        EOF
+
+  fill_subset_prompts:
+    desc: Fill missing prompts and fix safe-rung refusals in the benchmark subset (local)
+    vars:
+      input:       '{{ .input       | default "release/v1.0/metadata_subset.jsonl" }}'
+      output:      '{{ .output      | default "release/v1.0/metadata_subset.jsonl" }}'
+      rules:       '{{ .rules       | default "data/rules.jsonl" }}'
+      model:       '{{ .model       | default "Qwen/Qwen2.5-7B-Instruct" }}'
+      backend:     '{{ .backend     | default "local" }}'
+      base_url:    '{{ .base_url    | default "" }}'
+      concurrency: '{{ .concurrency | default "8" }}'
+      hf_home:     '{{ .hf_home     | default "/lustre/users/${USER}/hf-cache" }}'
+    cmds:
+      - mkdir -p {{ .hf_home | quote }} && HF_HOME={{ .hf_home | quote }} TRANSFORMERS_CACHE={{ .hf_home | quote }} uv run python scripts/fill_subset_prompts.py --input {{ .input | quote }} --output {{ .output | quote }} --rules {{ .rules | quote }} --model {{ .model | quote }} --backend {{ .backend | quote }} {{ if .base_url }}--base-url {{ .base_url | quote }} {{ end }}--concurrency {{ .concurrency | quote }} --report release/v1.0/fill_prompts_report.json {{ .CLI_ARGS }}
+
+  fill_subset_prompts_gpu:
+    desc: GPU job — fill missing prompts and fix safe-rung refusals in the benchmark subset
+    vars:
+      input:       '{{ .input       | default "release/v1.0/metadata_subset.jsonl" }}'
+      output:      '{{ .output      | default "release/v1.0/metadata_subset.jsonl" }}'
+      rules:       '{{ .rules       | default "data/rules.jsonl" }}'
+      model:       '{{ .model       | default "Qwen/Qwen2.5-7B-Instruct" }}'
+      backend:     '{{ .backend     | default "local" }}'
+      base_url:    '{{ .base_url    | default "" }}'
+      concurrency: '{{ .concurrency | default "8" }}'
+      hf_home:     '{{ .hf_home     | default "/lustre/users/${USER}/hf-cache" }}'
+      cpu:         '{{ .cpu         | default "128" }}'
+      p:           '{{ .p           | default "002-partition-default" }}'
+      tag:         '{{ .tag         | default "latest" }}'
+      log_root:    '{{ .log_root    | default "./logs" }}'
+    cmds:
+      - |
+        mkdir -p {{ .log_root }}
+        WORKDIR=$(pwd)
+        sbatch <<EOF
+        #!/bin/bash
+        #SBATCH --exclude=srdgx00095,srdgx00096,srdgx00113
+        #SBATCH --job-name=fill_subset_prompts
+        #SBATCH --partition={{ .p }}
+        #SBATCH --ntasks=1
+        #SBATCH --cpus-per-task={{ .cpu }}
+        #SBATCH --gres=gpu:1
+        #SBATCH --output={{ .log_root }}/%x_%j.out
+        #SBATCH --error={{ .log_root }}/%x_%j.err
+        #SBATCH --container-image=/lustre/users/vmduc/container_cache/image_generation_pipeline:{{ .tag }}.sqsh
+        #SBATCH --container-mounts=/lustre:/lustre,/store:/store,/home:/home
+
+        cd "$WORKDIR" || { echo "Failure: Could not cd to $WORKDIR"; exit 1; }
+
+        source .venv/bin/activate
+        mkdir -p {{ .hf_home | quote }}
+        export HF_HOME={{ .hf_home | quote }}
+        export TRANSFORMERS_CACHE={{ .hf_home | quote }}
+
+        PYTHONPATH=. uv run python scripts/fill_subset_prompts.py --input {{ .input | quote }} --output {{ .output | quote }} --rules {{ .rules | quote }} --model {{ .model | quote }} --backend {{ .backend | quote }} {{ if .base_url }}--base-url {{ .base_url | quote }} {{ end }}--concurrency {{ .concurrency | quote }} --report release/v1.0/fill_prompts_report.json {{ .CLI_ARGS }}
+        EOF
+
+  prepare_subset_gpu:
+    desc: "Combined GPU job: fill missing prompts → generate images → normalize paths → patch release metadata"
+    vars:
+      subset:       '{{ .subset       | default "release/v1.0/metadata_subset.jsonl" }}'
+      full_meta:    '{{ .full_meta    | default "release/v1.0/metadata.jsonl" }}'
+      image_dir:    '{{ .image_dir    | default "release/v1.0/images/" }}'
+      rules:        '{{ .rules        | default "data/rules.jsonl" }}'
+      llm_model:    '{{ .llm_model    | default "Qwen/Qwen2.5-7B-Instruct" }}'
+      backend:      '{{ .backend      | default "local" }}'
+      base_url:     '{{ .base_url     | default "" }}'
+      concurrency:  '{{ .concurrency  | default "8" }}'
+      image_root:   '{{ .image_root   | default "/lustre/users/vmduc/Projects/safety_image_data_generation" }}'
+      project_root: '{{ .project_root | default "." }}'
+      old_dataset:  '{{ .old_dataset  | default "/lustre/users/vmduc/Projects/safety_image_data_generation" }}'
+      hf_home:      '{{ .hf_home      | default "/lustre/users/${USER}/hf-cache" }}'
+      cpu:          '{{ .cpu          | default "128" }}'
+      p:            '{{ .p            | default "002-partition-default" }}'
+      tag:          '{{ .tag          | default "latest" }}'
+      log_root:     '{{ .log_root     | default "./logs" }}'
+    cmds:
+      - |
+        mkdir -p {{ .log_root }}
+        WORKDIR=$(pwd)
+        sbatch <<EOF
+        #!/bin/bash
+        #SBATCH --exclude=srdgx00095,srdgx00096,srdgx00113
+        #SBATCH --job-name=prepare_subset
+        #SBATCH --partition={{ .p }}
+        #SBATCH --ntasks=1
+        #SBATCH --cpus-per-task={{ .cpu }}
+        #SBATCH --gres=gpu:1
+        #SBATCH --output={{ .log_root }}/%x_%j.out
+        #SBATCH --error={{ .log_root }}/%x_%j.err
+        #SBATCH --container-image=/lustre/users/vmduc/container_cache/image_generation_pipeline:{{ .tag }}.sqsh
+        #SBATCH --container-mounts=/lustre:/lustre,/store:/store,/home:/home
+
+        cd "$WORKDIR" || { echo "Failure: Could not cd to $WORKDIR"; exit 1; }
+
+        source .venv/bin/activate
+        mkdir -p {{ .hf_home | quote }}
+        export HF_HOME={{ .hf_home | quote }}
+        export TRANSFORMERS_CACHE={{ .hf_home | quote }}
+
+        set -e
+
+        echo "=== Step 1: Fill missing prompts and fix safe-rung refusals ==="
+        PYTHONPATH=. uv run python scripts/fill_subset_prompts.py \
+          --input {{ .subset | quote }} \
+          --output {{ .subset | quote }} \
+          --rules {{ .rules | quote }} \
+          --model {{ .llm_model | quote }} \
+          --backend {{ .backend | quote }} \
+          {{ if .base_url }}--base-url {{ .base_url | quote }} {{ end }}\
+          --concurrency {{ .concurrency | quote }} \
+          --report release/v1.0/fill_prompts_report.json
+
+        echo "=== Step 2: Generate missing images (--no-score) ==="
+        PYTHONPATH=. uv run python -m pipeline.phase4_filter \
+          --input {{ .subset | quote }} \
+          --output {{ .subset | quote }} \
+          --image-root {{ .image_root | quote }} \
+          --project-root {{ .project_root | quote }} \
+          --no-score
+
+        echo "=== Step 3: Normalize paired_dataset/ paths → images/ symlinks ==="
+        PYTHONPATH=. uv run python scripts/normalize_subset_images.py \
+          --subset {{ .subset | quote }} \
+          --image-dir {{ .image_dir | quote }} \
+          --project-root {{ .project_root | quote }} \
+          --full-metadata {{ .full_meta | quote }}
+
+        echo "=== Step 4: Re-run full backfill to pick up any remaining new images ==="
+        PYTHONPATH=. uv run python scripts/backfill_image_paths.py \
+          --metadata {{ .full_meta | quote }} \
+          --t2i-paired-dataset paired_dataset/ \
+          --t2i-extra-datasets data/public_figures_run/paired_dataset/ \
+          --old-dataset-root {{ .old_dataset | quote }} \
+          --image-dir {{ .image_dir | quote }} \
+          --output {{ .full_meta | quote }} \
+          --report release/v1.0/backfill_report.json
+
+        echo "=== Step 5: Score subset images with VLM (for Exp 1 + Exp 10) ==="
+        PYTHONPATH=. uv run python scripts/score_subset.py \
+          --subset {{ .subset | quote }} \
+          --image-root "release/v1.0/" \
+          --model "Qwen/Qwen3-VL-8B-Thinking" \
+          --batch-size 4
+
+        echo "=== Done ==="
+        EOF
+
+  score_subset_gpu:
+    desc: Score subset images with VLM to add mllm_score_* fields (GPU job, ~2-4h)
+    vars:
+      subset:     '{{ .subset     | default "release/v1.0/metadata_subset.jsonl" }}'
+      image_root: '{{ .image_root | default "release/v1.0/" }}'
+      model:      '{{ .model      | default "Qwen/Qwen3-VL-8B-Thinking" }}'
+      batch_size: '{{ .batch_size | default "4" }}'
+      hf_home:    '{{ .hf_home    | default "/lustre/users/${USER}/hf-cache" }}'
+      cpu:        '{{ .cpu        | default "128" }}'
+      p:          '{{ .p          | default "002-partition-default" }}'
+      tag:        '{{ .tag        | default "latest" }}'
+      log_root:   '{{ .log_root   | default "./logs" }}'
+    cmds:
+      - |
+        mkdir -p {{ .log_root }}
+        WORKDIR=$(pwd)
+        sbatch <<EOF
+        #!/bin/bash
+        #SBATCH --exclude=srdgx00095,srdgx00096,srdgx00113
+        #SBATCH --job-name=score_subset
+        #SBATCH --partition={{ .p }}
+        #SBATCH --ntasks=1
+        #SBATCH --cpus-per-task={{ .cpu }}
+        #SBATCH --gres=gpu:1
+        #SBATCH --output={{ .log_root }}/%x_%j.out
+        #SBATCH --error={{ .log_root }}/%x_%j.err
+        #SBATCH --container-image=/lustre/users/vmduc/container_cache/image_generation_pipeline:{{ .tag }}.sqsh
+        #SBATCH --container-mounts=/lustre:/lustre,/store:/store,/home:/home
+
+        cd "$WORKDIR" || { echo "Failure: Could not cd to $WORKDIR"; exit 1; }
+
+        source .venv/bin/activate
+        mkdir -p {{ .hf_home | quote }}
+        export HF_HOME={{ .hf_home | quote }}
+        export TRANSFORMERS_CACHE={{ .hf_home | quote }}
+
+        PYTHONPATH=. uv run python scripts/score_subset.py \
+          --subset {{ .subset | quote }} \
+          --image-root {{ .image_root | quote }} \
+          --model {{ .model | quote }} \
+          --batch-size {{ .batch_size }} \
+          {{ .CLI_ARGS }}
+        EOF
+
+  clip_align_gpu:
+    desc: Compute CLIP text-image alignment scores for all subset pairs (GPU job, ~15-30 min)
+    vars:
+      subset:     '{{ .subset     | default "release/v1.0/metadata_subset.jsonl" }}'
+      image_root: '{{ .image_root | default "release/v1.0/" }}'
+      batch_size: '{{ .batch_size | default "64" }}'
+      report:     '{{ .report     | default "release/v1.0/clip_alignment_report.json" }}'
+      hf_home:    '{{ .hf_home    | default "/lustre/users/${USER}/hf-cache" }}'
+      cpu:        '{{ .cpu        | default "32" }}'
+      p:          '{{ .p          | default "002-partition-default" }}'
+      tag:        '{{ .tag        | default "latest" }}'
+      log_root:   '{{ .log_root   | default "./logs" }}'
+    cmds:
+      - |
+        mkdir -p {{ .log_root }}
+        WORKDIR=$(pwd)
+        sbatch <<EOF
+        #!/bin/bash
+        #SBATCH --exclude=srdgx00095,srdgx00096,srdgx00113
+        #SBATCH --job-name=clip_align
+        #SBATCH --partition={{ .p }}
+        #SBATCH --ntasks=1
+        #SBATCH --cpus-per-task={{ .cpu }}
+        #SBATCH --gres=gpu:1
+        #SBATCH --output={{ .log_root }}/%x_%j.out
+        #SBATCH --error={{ .log_root }}/%x_%j.err
+        #SBATCH --container-image=/lustre/users/vmduc/container_cache/image_generation_pipeline:{{ .tag }}.sqsh
+        #SBATCH --container-mounts=/lustre:/lustre,/store:/store,/home:/home
+
+        cd "$WORKDIR" || { echo "Failure: Could not cd to $WORKDIR"; exit 1; }
+
+        source .venv/bin/activate
+        mkdir -p {{ .hf_home | quote }}
+        export HF_HOME={{ .hf_home | quote }}
+        export TRANSFORMERS_CACHE={{ .hf_home | quote }}
+
+        PYTHONPATH=. uv run python scripts/compute_clip_alignment.py \
+          --subset {{ .subset | quote }} \
+          --image-root {{ .image_root | quote }} \
+          --batch-size {{ .batch_size }} \
+          --report {{ .report | quote }} \
+          {{ .CLI_ARGS }}
+        EOF
+
+  regen_flagged_gpu:
+    desc: Regenerate subset images below CLIP alignment threshold (GPU job, ~1.5-3h)
+    vars:
+      subset:     '{{ .subset     | default "release/v1.0/metadata_subset.jsonl" }}'
+      image_root: '{{ .image_root | default "release/v1.0/" }}'
+      threshold:  '{{ .threshold  | default "0.20" }}'
+      hf_home:    '{{ .hf_home    | default "/lustre/users/${USER}/hf-cache" }}'
+      cpu:        '{{ .cpu        | default "32" }}'
+      p:          '{{ .p          | default "002-partition-default" }}'
+      tag:        '{{ .tag        | default "latest" }}'
+      log_root:   '{{ .log_root   | default "./logs" }}'
+    cmds:
+      - |
+        mkdir -p {{ .log_root }}
+        WORKDIR=$(pwd)
+        sbatch <<EOF
+        #!/bin/bash
+        #SBATCH --exclude=srdgx00095,srdgx00096,srdgx00113
+        #SBATCH --job-name=regen_flagged
+        #SBATCH --partition={{ .p }}
+        #SBATCH --ntasks=1
+        #SBATCH --cpus-per-task={{ .cpu }}
+        #SBATCH --gres=gpu:1
+        #SBATCH --output={{ .log_root }}/%x_%j.out
+        #SBATCH --error={{ .log_root }}/%x_%j.err
+        #SBATCH --container-image=/lustre/users/vmduc/container_cache/image_generation_pipeline:{{ .tag }}.sqsh
+        #SBATCH --container-mounts=/lustre:/lustre,/store:/store,/home:/home
+
+        cd "$WORKDIR" || { echo "Failure: Could not cd to $WORKDIR"; exit 1; }
+
+        source .venv/bin/activate
+        mkdir -p {{ .hf_home | quote }}
+        export HF_HOME={{ .hf_home | quote }}
+        export TRANSFORMERS_CACHE={{ .hf_home | quote }}
+
+        PYTHONPATH=. uv run python scripts/regenerate_flagged.py \
+          --subset {{ .subset | quote }} \
+          --image-root {{ .image_root | quote }} \
+          --threshold {{ .threshold }} \
+          {{ .CLI_ARGS }}
+        EOF
+
+  refine_prompts_gpu:
+    desc: Refine ladder prompts via LLM word substitution for too_similar/incoherent ladders (GPU job, ~30-60min)
+    vars:
+      metadata:    '{{ .metadata    | default "release/v1.0/scored_metadata.jsonl" }}'
+      weak:        '{{ .weak        | default "release/v1.0/weak_ladders.jsonl" }}'
+      output:      '{{ .output      | default "release/v1.0/scored_metadata.jsonl" }}'
+      changed_ids: '{{ .changed_ids | default "release/v1.0/refined_ladder_ids.txt" }}'
+      model:       '{{ .model       | default "Qwen/Qwen2.5-7B-Instruct" }}'
+      concurrency: '{{ .concurrency | default "8" }}'
+      hf_home:     '{{ .hf_home     | default "/lustre/users/${USER}/hf-cache" }}'
+      cpu:         '{{ .cpu         | default "32" }}'
+      p:           '{{ .p           | default "002-partition-default" }}'
+      tag:         '{{ .tag         | default "latest" }}'
+      log_root:    '{{ .log_root    | default "./logs" }}'
+    cmds:
+      - |
+        mkdir -p {{ .log_root }}
+        WORKDIR=$(pwd)
+        sbatch <<EOF
+        #!/bin/bash
+        #SBATCH --exclude=srdgx00095,srdgx00096,srdgx00113
+        #SBATCH --job-name=refine_prompts
+        #SBATCH --partition={{ .p }}
+        #SBATCH --ntasks=1
+        #SBATCH --cpus-per-task={{ .cpu }}
+        #SBATCH --gres=gpu:1
+        #SBATCH --output={{ .log_root }}/%x_%j.out
+        #SBATCH --error={{ .log_root }}/%x_%j.err
+        #SBATCH --container-image=/lustre/users/vmduc/container_cache/image_generation_pipeline:{{ .tag }}.sqsh
+        #SBATCH --container-mounts=/lustre:/lustre,/store:/store,/home:/home
+
+        cd "$WORKDIR" || { echo "Failure: Could not cd to $WORKDIR"; exit 1; }
+
+        mkdir -p {{ .hf_home | quote }}
+        export HF_HOME={{ .hf_home | quote }}
+        export TRANSFORMERS_CACHE={{ .hf_home | quote }}
+
+        PYTHONPATH=. uv run python scripts/refine_prompts.py \
+          --metadata    {{ .metadata    | quote }} \
+          --weak        {{ .weak        | quote }} \
+          --output      {{ .output      | quote }} \
+          --changed-ids {{ .changed_ids | quote }} \
+          --model       {{ .model       | quote }} \
+          --concurrency {{ .concurrency }} \
+          {{ .CLI_ARGS }}
+        EOF
