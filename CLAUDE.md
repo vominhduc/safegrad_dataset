@@ -69,6 +69,7 @@ All generated data (including images) goes to:
 - ✅ Done: Improved Stage 4 VLM system prompt — Qwen3-VL-8B-Thinking was outputting free-form reasoning without JSON (no `</think>` tags). New prompt enforces JSON-only output; alignment check relaxed to "YES if main elements match".
 - ✅ Done: Scaled up: `--s0-samples 500` (9,500 seeds), `--s1-max-per-cluster 10` → expect 500–2000 ladders entering Stage 4, targeting ~5000 images / 1000 ladders.
 - ✅ Done: Cancelled job **4026358** (scale too small), submitted job **4026371** (~28h runtime).
+- ✅ Done: Committed all changes to branch `asl-5level-pipeline` and pushed to GitHub (`git@github.com:vominhduc/safegrad_dataset.git`). `main` remains untouched.
 - 🔄 In Progress: Job **4026371** running — outputs to `safegrad_run/`
 - 📌 Next: Check Stage 1 output count (should be 500–2000, not 19). If Stage 4 rejection still >50%, consider switching VLM to Qwen2.5-VL-7B (non-thinking) for reliable JSON output.
 
