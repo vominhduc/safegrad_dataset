@@ -3,16 +3,12 @@
 The third stage of the Automated Severity Ladder (ASL) pipeline.
 
 For each rung that lacks an image, generates one using the T2I model
-specified in the ladder's ``generator_model`` field.  Supports all four
-T2I models evaluated in the paper:
+specified in the ladder's ``generator_model`` field.  Supports three
+commercially-licensed T2I models (Apache-2.0):
 
   - ``sdxl``   : Stable Diffusion XL (stabilityai/stable-diffusion-xl-base-1.0)
-  - ``zimage`` : Z-Turbo (Tongyi-MAI/Z-Image-Turbo)
-  - ``flux1``  : FLUX.1-dev (black-forest-labs/FLUX.1-dev)
-  - ``large``  : Stable Diffusion 3.5 Large (stabilityai/stable-diffusion-3.5-large)
-
-Paper reference: Section 3, Stage 3 ("T2I Image Synthesis")
-Models evaluated: SDXL, Z-Turbo, FLUX.1, SD 3.5 Large (Table 3)
+  - ``flux1``  : FLUX.1-schnell (black-forest-labs/FLUX.1-schnell)
+  - ``kolors`` : Kolors (Kwai-Kolors/Kolors)
 
 Note: Image generation requires a GPU and ~10-20 GB VRAM per model.
 The VLM verification (monotonicity scoring) runs in Stage 4.
@@ -56,30 +52,37 @@ log = logging.getLogger(__name__)
 # Mapping from metadata generator_model shorthand → HuggingFace model ID
 _MODEL_MAP: dict[str, str] = {
     "sdxl":   "stabilityai/stable-diffusion-xl-base-1.0",
-    "flux1":  "black-forest-labs/FLUX.1-dev",
-    "large":  "stabilityai/stable-diffusion-3.5-large",
-    "zimage": "Tongyi-MAI/Z-Image-Turbo",
+    "flux1":  "black-forest-labs/FLUX.1-schnell",
+    "kolors": "Kwai-Kolors/Kolors",
 }
 
-# Paper T2I model distribution (Section 4, Stage 3):
-#   SDXL 55.8%, Z-Turbo 26.8%, FLUX.1-dev 16.3%, SD3.5-Large 1.1%
+# Per-model generation defaults (steps and guidance scale).
+# FLUX.1-schnell is a guidance-distilled model (4 steps, CFG=0); SDXL needs
+# more steps; Kolors uses a SDXL-style architecture with moderate CFG.
+_MODEL_GENERATION_DEFAULTS: dict[str, dict] = {
+    "sdxl":   {"num_inference_steps": 40, "guidance_scale": 7.5},
+    "flux1":  {"num_inference_steps":  4, "guidance_scale": 0.0},
+    "kolors": {"num_inference_steps": 50, "guidance_scale": 5.0},
+}
+
+# Default T2I model distribution (commercial Apache-2.0 licensed models only):
+#   SDXL 50%, FLUX.1-schnell 30%, Kolors 20%
 PAPER_T2I_PROPORTIONS: list[tuple[str, float]] = [
-    ("sdxl",   0.558),
-    ("zimage", 0.268),
-    ("flux1",  0.163),
-    ("large",  0.011),
+    ("sdxl",   0.50),
+    ("flux1",  0.30),
+    ("kolors", 0.20),
 ]
 
-# Default CLI value that reproduces the paper distribution
+# Default CLI value
 _DEFAULT_T2I_MODELS_ARG: list[str] = [
-    "sdxl:55.8", "zimage:26.8", "flux1:16.3", "large:1.1",
+    "sdxl:50", "flux1:30", "kolors:20",
 ]
 
 
 def parse_t2i_weights(specs: list[str]) -> list[tuple[str, float]]:
     """Parse ``KEY[:WEIGHT]`` T2I model specifications into normalised (key, weight) pairs.
 
-    Accepts shorthands (sdxl, flux1, large, zimage) or full HF model IDs.
+    Accepts shorthands (sdxl, flux1, kolors) or full HF model IDs.
     If no weights are given, all models share the quota equally.
     """
     parsed: list[tuple[str, float]] = []
@@ -201,7 +204,6 @@ class PipelineCache:
         import torch
         from diffusers import (
             FluxPipeline,
-            StableDiffusion3Pipeline,
             StableDiffusionPipeline,
             StableDiffusionXLPipeline,
             DiffusionPipeline,
@@ -211,8 +213,7 @@ class PipelineCache:
         device = "cuda" if torch.cuda.is_available() else "cpu"
 
         cls_map = {
-            "black-forest-labs/FLUX.1-dev":                    FluxPipeline,
-            "stabilityai/stable-diffusion-3.5-large":          StableDiffusion3Pipeline,
+            "black-forest-labs/FLUX.1-schnell":                FluxPipeline,
             "stabilityai/stable-diffusion-xl-base-1.0":        StableDiffusionXLPipeline,
             "CompVis/stable-diffusion-v1-4":                   StableDiffusionPipeline,
         }
@@ -241,8 +242,16 @@ class PipelineCache:
         height: int = 1024,
         width: int = 1024,
     ) -> Image.Image:
-        """Generate an image synchronously in a thread, serialised through GPU semaphore."""
+        """Generate an image synchronously in a thread, serialised through GPU semaphore.
+
+        Uses per-model defaults for inference steps and guidance scale to match
+        each model's recommended settings (see ``_MODEL_GENERATION_DEFAULTS``).
+        """
         hf_model_id = _MODEL_MAP.get(model_key, model_key)
+        model_defaults = _MODEL_GENERATION_DEFAULTS.get(model_key, {})
+        num_steps     = model_defaults.get("num_inference_steps", 30)
+        guidance_scale = model_defaults.get("guidance_scale", 7.5)
+
         async with self._gpu_sem:
             pipe = await self._load_sync_in_thread(hf_model_id)
 
@@ -258,7 +267,8 @@ class PipelineCache:
                     generator=generator,
                     height=height,
                     width=width,
-                    num_inference_steps=20,
+                    num_inference_steps=num_steps,
+                    guidance_scale=guidance_scale,
                 )
                 result = pipe(**kwargs)  # type: ignore[operator]
                 img = result.images[0]
@@ -318,12 +328,13 @@ async def _pregenerate_all_images(
     pipeline_cache: PipelineCache,
     image_dir: Path,
 ) -> None:
-    """Pre-generate all missing synthetic images, grouped by generator model.
+    """Generate images for all five rungs of every ladder, grouped by generator model.
 
-    By processing each model's work items in one batch before moving to the next,
-    every T2I model is loaded exactly once — eliminating the repeated load/unload
-    cycles that occur when concurrent ladder tasks interleave different models.
+    The same T2I model and seed are used for all five rungs within a ladder,
+    isolating severity differences from generative variance.
+    This includes the safe rung — all four rungs receive an image.
 
+    Rungs are processed model-by-model so each T2I model loads exactly once.
     Rung ``image_path`` fields are updated in-place on success.
     """
     by_model: dict[str, list[tuple[dict, str, Path, str, int, str]]] = defaultdict(list)
@@ -334,17 +345,13 @@ async def _pregenerate_all_images(
         top_seed  = ladder.get("seed")
         ladder_id = ladder.get("ladder_id", "?")
 
-        for level in ("safe", "low_risk", "mid_risk", "high_risk"):
+        for level in ("safe", "low_risk", "mid_risk", "high_risk", "very_high_risk"):
             rung = ladder.get(f"rung_{level}", {})
             if not rung:
                 continue
 
-            # Skip rungs that already have an image
+            # Skip rungs that already have an image on disk
             if rung.get("image_path"):
-                continue
-
-            # Only generate for synthetic rungs (non-safe)
-            if not rung.get("synthetic", False) or level == "safe":
                 continue
 
             gen_model = rung.get("generator_model") or top_gen
@@ -354,9 +361,11 @@ async def _pregenerate_all_images(
             if not prompt:
                 continue
 
-            rung_seed = rung.get("seed")
-            seed = rung_seed if rung_seed is not None else top_seed
-            effective_seed = seed if seed is not None else _synthetic_seed(ladder_id, level)
+            # Paper: the same model and seed are used for all four rungs within a
+            # ladder, isolating severity differences from generative variance.
+            # Use the ladder-level seed for every rung; fall back to a deterministic
+            # hash only when no seed is available at all.
+            effective_seed = top_seed if top_seed is not None else _synthetic_seed(ladder_id, level)
 
             rel_path = _image_path(category, level, ladder_id)
             save_path = image_dir / category / f"{ladder_id}_{level}.png"
@@ -415,16 +424,15 @@ def parse_args() -> argparse.Namespace:
         metavar="MODEL[:WEIGHT]",
         help=(
             "T2I models to assign to ladders that have no generator_model. "
-            "Each entry is a model key (sdxl|flux1|large|zimage) or a full "
+            "Each entry is a model key (sdxl|flux1|kolors) or a full "
             "HuggingFace model ID, with an optional :WEIGHT suffix. "
             "Examples:\n"
             "  --t2i-models sdxl                     (single model, all ladders)\n"
             "  --t2i-models sdxl flux1               (two models, equal weight)\n"
-            "  --t2i-models sdxl:56 flux1:44         (custom weights)\n"
+            "  --t2i-models sdxl:60 flux1:40         (custom weights)\n"
             "Ladders that already have a valid generator_model keep their value. "
             "Use 'none' to disable auto-assignment entirely. "
-            "Default: paper distribution "
-            "(sdxl:55.8 zimage:26.8 flux1:16.3 large:1.1)."
+            "Default: sdxl:50 flux1:30 kolors:20 (commercial Apache-2.0 models only)."
         ),
     )
     return p.parse_args()

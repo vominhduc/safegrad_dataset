@@ -7,8 +7,8 @@ import re
 # Severity-level constants
 # ---------------------------------------------------------------------------
 
-LEVELS_ORDERED: tuple[str, ...] = ("safe", "low_risk", "mid_risk", "high_risk")
-UNSAFE_LEVELS: tuple[str, ...] = ("low_risk", "mid_risk", "high_risk")
+LEVELS_ORDERED: tuple[str, ...] = ("safe", "low_risk", "mid_risk", "high_risk", "very_high_risk")
+UNSAFE_LEVELS: tuple[str, ...] = ("low_risk", "mid_risk", "high_risk", "very_high_risk")
 LEVEL_RANK: dict[str, int] = {lvl: i for i, lvl in enumerate(LEVELS_ORDERED)}
 
 
@@ -23,10 +23,12 @@ def norm_level(s: str) -> str:
         return s
     if s in ("low", "lowrisk"):
         return "low_risk"
-    if s in ("mid", "medium", "medium_risk", "midrisk"):
+    if s in ("mid", "medium", "medium_risk", "midrisk", "moderate", "moderate_risk"):
         return "mid_risk"
     if s in ("high", "highrisk"):
         return "high_risk"
+    if s in ("very_high", "veryhigh", "veryhighrisk", "very_high_risk"):
+        return "very_high_risk"
     return "safe"
 
 

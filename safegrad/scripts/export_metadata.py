@@ -65,7 +65,7 @@ logging.basicConfig(
 log = logging.getLogger(__name__)
 
 _KEEP_TOP = {"ladder_id", "category", "generator_model", "red_team_model", "seed"}
-_LEVELS = ("safe", "low_risk", "mid_risk", "high_risk")
+_LEVELS = ("safe", "low_risk", "mid_risk", "high_risk", "very_high_risk")
 
 
 def _strip_record(rec: dict) -> dict:

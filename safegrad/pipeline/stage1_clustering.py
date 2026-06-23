@@ -84,7 +84,8 @@ def exact_dedup(records: list[dict]) -> tuple[list[dict], int]:
     for rec in records:
         cat = rec.get("category", "").lower()
         sev = norm_level(rec.get("target_severity", ""))
-        key = (cat, sev, rec.get("prompt_unsafe", "").strip())
+        unsafe = rec.get("prompt_unsafe", "").strip()
+        key = (cat, sev, unsafe or rec.get("prompt_safe", "").strip())
         if key not in seen or descriptiveness_score(rec) > descriptiveness_score(seen[key]):
             seen[key] = rec
 
@@ -156,17 +157,56 @@ def _build_clusters(
     return clusters
 
 
+def _greedy_diverse_select(
+    local_indices: list[int],
+    embeddings: np.ndarray,
+    records: list[dict],
+    k: int,
+) -> list[int]:
+    """Return up to k indices from local_indices that maximise diversity.
+
+    Uses greedy max-min: start with the most descriptive record, then
+    repeatedly pick the one with maximum minimum cosine distance to all
+    already-selected records.  Embeddings must be L2-normalised so that
+    inner product equals cosine similarity.
+    """
+    if len(local_indices) <= k:
+        return local_indices
+
+    # Seed with the most descriptive record
+    seed = max(local_indices, key=lambda i: descriptiveness_score(records[i]))
+    selected = [seed]
+    remaining = [i for i in local_indices if i != seed]
+
+    while len(selected) < k and remaining:
+        # max over remaining: min cosine distance to any selected
+        best = max(
+            remaining,
+            key=lambda i: min(
+                1.0 - float(np.dot(embeddings[i], embeddings[s]))
+                for s in selected
+            ),
+        )
+        selected.append(best)
+        remaining.remove(best)
+
+    return selected
+
+
 def assign_ladder_ids(
     records: list[dict],
     model_name: str,
     threshold: float,
     batch_size: int,
+    max_per_cluster: int = 1,
 ) -> list[dict]:
     """Embed ``prompt_safe`` per category, cluster similar safe anchors, and
-    annotate every record with ``ladder_id`` and ``cluster_safe_anchor``.
+    return one representative record per ladder with ``ladder_id`` and
+    ``cluster_safe_anchor`` fields set.
 
-    Categories are processed independently so that semantically similar
-    safe prompts from different risk categories are never merged.
+    With ``max_per_cluster > 1``, up to that many diverse representatives are
+    selected per cluster using greedy max-min distance, each becoming its own
+    ladder.  Categories are processed independently.
     """
     log.info("Loading embedding model: %s", model_name)
     model = SentenceTransformer(model_name)
@@ -175,7 +215,7 @@ def assign_ladder_ids(
     for i, rec in enumerate(records):
         by_category[rec.get("category", "unknown").lower()].append(i)
 
-    annotated = list(records)  # shallow copy; we add keys in place
+    selected_records: list[dict] = []
     ladder_counter = 0
 
     for category, cat_indices in sorted(by_category.items()):
@@ -187,7 +227,7 @@ def assign_ladder_ids(
             safe_prompts,
             batch_size=batch_size,
             show_progress_bar=False,
-            normalize_embeddings=False,
+            normalize_embeddings=True,
             convert_to_numpy=True,
         )
 
@@ -195,21 +235,20 @@ def assign_ladder_ids(
         log.info("  [%s] %d records -> %d clusters", category, len(cat_indices), len(clusters))
 
         for cluster_local_indices in clusters.values():
-            ladder_counter += 1
-            lid = f"{category}_{ladder_counter:04d}"
-
-            # Select the canonical safe anchor: most-descriptive record in cluster
-            cluster_records = [cat_records[li] for li in cluster_local_indices]
-            anchor_rec = max(cluster_records, key=descriptiveness_score)
-            canonical_safe = anchor_rec["prompt_safe"]
-
-            for li in cluster_local_indices:
-                global_i = cat_indices[li]
-                annotated[global_i] = {
+            representatives = _greedy_diverse_select(
+                cluster_local_indices, embeddings, cat_records, max_per_cluster
+            )
+            for rep_local_i in representatives:
+                ladder_counter += 1
+                lid = f"{category}_{ladder_counter:04d}"
+                canonical_safe = cat_records[rep_local_i]["prompt_safe"]
+                global_i = cat_indices[rep_local_i]
+                selected_records.append({
                     **records[global_i],
                     "ladder_id": lid,
                     "cluster_safe_anchor": canonical_safe,
-                }
+                    "cluster_size": len(cluster_local_indices),
+                })
 
     try:
         model.to("cpu")
@@ -218,8 +257,11 @@ def assign_ladder_ids(
     del model
     _release_torch_memory()
 
-    log.info("Assigned %d ladder IDs across %d categories", ladder_counter, len(by_category))
-    return annotated
+    log.info(
+        "Assigned %d ladder IDs across %d categories (max_per_cluster=%d)",
+        ladder_counter, len(by_category), max_per_cluster,
+    )
+    return selected_records
 
 
 # ---------------------------------------------------------------------------
@@ -231,11 +273,13 @@ def parse_args() -> argparse.Namespace:
         description=__doc__,
         formatter_class=argparse.RawDescriptionHelpFormatter,
     )
-    p.add_argument("--input",      default="data/metadata.jsonl",       help="Source JSONL file")
-    p.add_argument("--output",     default="metadata_stage1.jsonl",     help="Output JSONL file")
-    p.add_argument("--model",      default="all-MiniLM-L6-v2",          help="Sentence-transformer model")
-    p.add_argument("--threshold",  default=0.95, type=float,            help="Cosine similarity threshold (paper: 0.95)")
-    p.add_argument("--batch-size", default=512,  type=int,              help="Embedding batch size")
+    p.add_argument("--input",           default="data/metadata.jsonl",   help="Source JSONL file")
+    p.add_argument("--output",          default="metadata_stage1.jsonl", help="Output JSONL file")
+    p.add_argument("--model",           default="all-MiniLM-L6-v2",     help="Sentence-transformer model")
+    p.add_argument("--threshold",       default=0.95, type=float,       help="Cosine similarity threshold (paper: 0.95)")
+    p.add_argument("--batch-size",      default=512,  type=int,         help="Embedding batch size")
+    p.add_argument("--max-per-cluster", default=1,    type=int,
+                   help="Max diverse representatives per cluster (default: 1)")
     return p.parse_args()
 
 
@@ -262,6 +306,7 @@ def main() -> None:
         model_name=args.model,
         threshold=args.threshold,
         batch_size=args.batch_size,
+        max_per_cluster=args.max_per_cluster,
     )
 
     n_ladders = len({r["ladder_id"] for r in records})

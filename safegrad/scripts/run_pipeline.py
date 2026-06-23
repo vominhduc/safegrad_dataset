@@ -43,13 +43,11 @@ Intermediate files written to --workdir:
   run_summary.json                 run_summary.json
 
 Paper models (Section 4):
-  Stage 0 seeds:          Mistral-7B (36.5%), Llama-2-7b (31.6%),
-                          Dolphin-2.9-Llama3 (23.4%), Vicuna-7B (8.5%)
+  Stage 0 seeds:          Mistral-7B-Instruct (50%), Qwen2.5-7B-Instruct (50%)
   Stage 2a judge:         Qwen/Qwen2.5-7B-Instruct  (Path A only)
-  Stage 2b interpolation: meta-llama/Llama-3-70B-Instruct
+  Stage 2b interpolation: Qwen/Qwen2.5-72B-Instruct
   Stage 2c quality score: Qwen/Qwen2.5-7B-Instruct
-  Stage 3 T2I:            SDXL (55.8%), Z-Turbo (26.8%),
-                          FLUX.1-dev (16.3%), SD3.5-Large (1.1%)
+  Stage 3 T2I:            SDXL (50%), FLUX.1-schnell (30%), Kolors (20%)
   Stage 4 VLM:            Qwen/Qwen3-VL-8B-Thinking (chain-of-thought)
 """
 
@@ -127,11 +125,12 @@ def run_stage1(args: argparse.Namespace, workdir: Path, input_path: Path) -> Pat
     output = workdir / "metadata_stage1.jsonl"
     _run(_uv(
         "safegrad.pipeline.stage1_clustering",
-        "--input",      str(input_path),
-        "--output",     str(output),
-        "--model",      args.s1_model,
-        "--threshold",  str(args.s1_threshold),
-        "--batch-size", str(args.s1_batch_size),
+        "--input",           str(input_path),
+        "--output",          str(output),
+        "--model",           args.s1_model,
+        "--threshold",       str(args.s1_threshold),
+        "--batch-size",      str(args.s1_batch_size),
+        "--max-per-cluster", str(args.s1_max_per_cluster),
     ), "Stage 1")
     return output
 
@@ -216,15 +215,16 @@ def run_stage3(args: argparse.Namespace, workdir: Path, input_path: Path) -> Pat
 
 
 def run_stage4(args: argparse.Namespace, workdir: Path, input_path: Path) -> Path:
-    """Stage 4: VLM monotonicity verification."""
-    output    = workdir / "metadata_stage4.jsonl"
-    image_dir = workdir / "images"
+    """Stage 4: VLM visual verification."""
+    output = workdir / "metadata_stage4.jsonl"
+    # image_path fields are stored as "images/{category}/..." relative to workdir,
+    # so --image-root must be workdir itself, not workdir/images.
     cmd = _uv(
         "safegrad.pipeline.stage4_verification",
         "--input",           str(input_path),
         "--output",          str(output),
         "--rules",           str(args.rules),
-        "--image-root",      str(image_dir),
+        "--image-root",      str(workdir),
         "--vlm-model",       args.s4_model,
         "--backend",         args.s4_backend,
         "--thinking-budget", str(args.s4_thinking_budget),
@@ -277,12 +277,12 @@ def parse_args() -> argparse.Namespace:
     # ── Stage 0: seed generation (Path B, no --seeds) ────────────────────────
     g0 = p.add_argument_group("Stage 0 — safe seed generation (Path B only)")
     g0.add_argument(
-        "--s0-models", nargs="+", default=["mistral:36.5", "llama2:31.6", "dolphin:23.4", "vicuna:8.5"],
+        "--s0-models", nargs="+", default=["mistral:50", "qwen25:50"],
         metavar="MODEL[:WEIGHT]",
         help=(
             "Red-team LLMs for seed generation as KEY[:WEIGHT] entries. "
-            "Examples: --s0-models mistral  |  --s0-models mistral:50 llama2:50. "
-            "Default: paper distribution (mistral:36.5 llama2:31.6 dolphin:23.4 vicuna:8.5)."
+            "Examples: --s0-models mistral  |  --s0-models mistral:50 qwen25:50. "
+            "Default: equal split between mistral and qwen25."
         ),
     )
     g0.add_argument("--s0-samples",    default=50, type=int,
@@ -292,16 +292,18 @@ def parse_args() -> argparse.Namespace:
     g0.add_argument("--s0-seed",       default=42, type=int,
                     help="Random seed (default: 42)")
     g0.add_argument("--s0-categories", nargs="+", default=None, metavar="CAT",
-                    help="Restrict to these categories (default: all 11)")
+                    help="Restrict to these categories (default: all 19)")
 
     # ── Stage 1: clustering ───────────────────────────────────────────────────
     g1 = p.add_argument_group("Stage 1 — deduplication and FAISS clustering")
-    g1.add_argument("--s1-model",      default="all-MiniLM-L6-v2",
+    g1.add_argument("--s1-model",           default="all-MiniLM-L6-v2",
                     help="Sentence-transformer for embeddings (default: all-MiniLM-L6-v2)")
-    g1.add_argument("--s1-threshold",  default=0.95, type=float,
+    g1.add_argument("--s1-threshold",       default=0.95, type=float,
                     help="Cosine similarity cutoff (paper: 0.95, default: 0.95)")
-    g1.add_argument("--s1-batch-size", default=512,  type=int,
+    g1.add_argument("--s1-batch-size",      default=512,  type=int,
                     help="Embedding batch size (default: 512)")
+    g1.add_argument("--s1-max-per-cluster", default=1,    type=int,
+                    help="Max diverse representatives per cluster (default: 1)")
 
     # ── Stage 2a: judge (Path A only) ────────────────────────────────────────
     g2a = p.add_argument_group("Stage 2a — severity judge (Path A / --paired-input only)")
@@ -317,8 +319,8 @@ def parse_args() -> argparse.Namespace:
 
     # ── Stage 2b: interpolation ───────────────────────────────────────────────
     g2b = p.add_argument_group("Stage 2b — prompt synthesis (all missing unsafe rungs)")
-    g2b.add_argument("--s2b-model",       default="meta-llama/Llama-3-70B-Instruct",
-                     help="Generative LLM (paper: Llama-3-70B-Instruct)")
+    g2b.add_argument("--s2b-model",       default="Qwen/Qwen2.5-72B-Instruct",
+                     help="Generative LLM for prompt interpolation (default: Qwen2.5-72B-Instruct)")
     g2b.add_argument("--s2b-backend",     choices=("local", "openai"), default="local")
     g2b.add_argument("--s2b-base-url",    default="",
                      help="OpenAI-compatible API base URL for generative LLM")
@@ -343,14 +345,14 @@ def parse_args() -> argparse.Namespace:
     g3 = p.add_argument_group("Stage 3 — T2I reference image generation")
     g3.add_argument(
         "--s3-t2i-models", nargs="+",
-        default=["sdxl:55.8", "zimage:26.8", "flux1:16.3", "large:1.1"],
+        default=["sdxl:50", "flux1:30", "kolors:20"],
         metavar="MODEL[:WEIGHT]",
         help=(
             "T2I models to assign to ladders as KEY[:WEIGHT] entries. "
-            "Keys: sdxl, flux1, large, zimage (or full HF IDs). "
+            "Keys: sdxl, flux1, kolors (or full HF IDs). "
             "Examples: --s3-t2i-models sdxl  |  --s3-t2i-models sdxl:60 flux1:40. "
             "Use 'none' to disable auto-assignment. "
-            "Default: paper distribution (sdxl:55.8 zimage:26.8 flux1:16.3 large:1.1)."
+            "Default: sdxl:50 flux1:30 kolors:20 (commercial Apache-2.0 models only)."
         ),
     )
     g3.add_argument("--s3-no-generate", action="store_true",

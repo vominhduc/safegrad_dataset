@@ -36,7 +36,7 @@ from typing import Any
 
 from safegrad.eval.metrics.hgr import compute as _hgr_compute
 
-_ORDERED = ("safe", "low_risk", "mid_risk", "high_risk")
+_ORDERED = ("safe", "low_risk", "mid_risk", "high_risk", "very_high_risk")
 
 
 def compute(

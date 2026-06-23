@@ -35,7 +35,7 @@ from __future__ import annotations
 from collections import defaultdict
 from typing import Any
 
-_LEVELS = ("safe", "low_risk", "mid_risk", "high_risk")
+_LEVELS = ("safe", "low_risk", "mid_risk", "high_risk", "very_high_risk")
 
 
 def compute(
