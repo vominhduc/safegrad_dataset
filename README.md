@@ -2,7 +2,7 @@
 
 **SafeGrad: A Severity-Graded Benchmark for Safety Evaluation, Defense, and Attack of Text-to-Image Models**
 
-> EMNLP 2026 submission.
+> **Pipeline v1 (v1.0.0)** — the Adversarial Severity Ladders (ASL) pipeline and benchmark described in the SafeGrad paper: 1,026 ladders over four rungs (L0–L3) and 11 risk categories.
 
 SafeGrad is a safety benchmark of **1,026 adversarial severity ladders** spanning 11 risk categories. Each ladder escalates through four severity levels — Safe (L0), Low-risk (L1), Mid-risk (L2), High-risk (L3) — with a paired prompt, reference image, and risk explanation at each rung. SafeGrad is constructed automatically via the **Adversarial Severity Ladders (ASL) pipeline** without manual prompt authoring.
 
@@ -52,15 +52,14 @@ safegrad/
     export_metadata.py          — Export public metadata from pipeline output
 
 data/
-  metadata.jsonl       — Raw prompt pairs (input to Stage 1)
-  rules.jsonl          — Category-specific escalation rules (used in Stages 2 & 4)
-  safegrad_test_input.jsonl — 6-record sample for quick testing
+  rules.jsonl              — Category-specific escalation rules (used in Stages 2 & 4)
+  safegrad_test_input.jsonl — 6-record paired sample for quick testing (Path A)
 
-release/
-  v1.1/
-    metadata.jsonl     — Public release (1,026 ladders)
-    images/            — Reference images (4,104 PNGs)
+release/  (created by the export step below — not tracked in git)
 ```
+
+The released benchmark (1,026 ladders, 4,104 reference images) is produced by
+the export step and distributed separately under its access terms.
 
 ---
 
@@ -70,7 +69,7 @@ The pipeline has four stages (plus an optional seed-generation pre-stage). For d
 
 ### Stage 0 — Safe Seed Generation *(optional)*
 
-Generate safe seed prompts. Skip if using the released `data/metadata.jsonl`.
+Generate safe seed prompts. Skip if you already have a seeds or paired-input file.
 
 ```bash
 uv run python -m safegrad.pipeline.stage0_seed_generation \
@@ -81,7 +80,7 @@ uv run python -m safegrad.pipeline.stage0_seed_generation \
 
 ```bash
 uv run python -m safegrad.pipeline.stage1_clustering \
-  --input  data/metadata.jsonl \
+  --input  data/seeds.jsonl \
   --output data/stage1_out.jsonl
 ```
 
@@ -121,8 +120,7 @@ uv run python -m safegrad.pipeline.stage4_verification \
   --input      data/stage3_out.jsonl \
   --output     data/stage4_out.jsonl \
   --image-root data/images/ \
-  --vlm-model  Qwen/Qwen3-VL-8B-Thinking \
-  --min-score-gap 0.4
+  --vlm-model  Qwen/Qwen3-VL-8B-Thinking
 ```
 
 ### Run all stages at once
@@ -146,7 +144,7 @@ uv run python safegrad/scripts/run_pipeline.py \
 
 ```bash
 uv run python safegrad/scripts/run_pipeline.py \
-  --paired-input data/metadata.jsonl \
+  --paired-input data/safegrad_test_input.jsonl \
   --workdir      data/pipeline_run/ \
   --rules        data/rules.jsonl
 ```
@@ -157,8 +155,8 @@ uv run python safegrad/scripts/run_pipeline.py \
 uv run python safegrad/scripts/export_metadata.py \
   --input      data/stage4_out.jsonl \
   --image-root data/ \
-  --output     release/v1.1/metadata.jsonl \
-  --image-dir  release/v1.1/
+  --output     release/v1/metadata.jsonl \
+  --image-dir  release/v1/
 ```
 
 ---
@@ -169,10 +167,12 @@ Set environment variables and submit via `sbatch`:
 
 ```bash
 export HF_TOKEN=hf_...
-sbatch scripts/test_safegrad_pipeline.sh
+sbatch run_test.sh
 ```
 
-The test script runs all four stages on a 2-ladder sample (`data/safegrad_test_input.jsonl`) and writes results to `data/safegrad_test_run/`. Logs go to `logs/safegrad_test_<jobid>.out`.
+The test script runs Stages 1–4 on the bundled 6-record paired sample
+(`data/safegrad_test_input.jsonl`, Path A) and writes results to
+`data/safegrad_test_run/`. Logs go to `logs/safegrad_test_<jobid>.out`.
 
 For a full production run, adapt the script with your input path and desired workdir.
 
@@ -185,12 +185,12 @@ Run the evaluation suite against the released dataset:
 ```bash
 # CPU metrics (monotonicity, coverage, attack rates)
 uv run python -m safegrad.eval.run_eval \
-  --dataset release/v1.1/metadata.jsonl \
+  --dataset release/v1/metadata.jsonl \
   --output-dir data/eval_results/
 
 # HGR/SBS scoring (uses mllm_score_* fields)
 uv run python -m safegrad.eval.run_eval \
-  --dataset release/v1.1/metadata.jsonl \
+  --dataset release/v1/metadata.jsonl \
   --eval-hgr
 ```
 
@@ -210,4 +210,5 @@ See [`safegrad/eval/`](safegrad/eval/) for the full experiment suite.
 
 ## License
 
-Dataset: [CC BY-NC 4.0](LICENSE) · Code: [MIT](LICENSE)
+Dataset and code: [CC BY-NC 4.0](LICENSE) — usage is additionally governed by the
+[Terms of Use](TERMS_OF_USE.md).

@@ -1,7 +1,7 @@
 """SafeGrad: Automated Severity Ladder (ASL) construction pipeline and evaluation suite.
 
 Paper: "SafeGrad: A Severity-Graded Benchmark for Safety Evaluation, Defense,
-       and Attack of Text-to-Image Models" (EMNLP 2026)
+       and Attack of Text-to-Image Models"
 
 Repository layout
 -----------------

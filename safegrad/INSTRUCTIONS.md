@@ -273,13 +273,13 @@ After Stage 4, strip internal scoring fields and copy images for distribution:
 uv run python safegrad/scripts/export_metadata.py \
   --input      data/stage4_out.jsonl \
   --image-root data/ \
-  --output     release/v1.1/metadata.jsonl \
-  --image-dir  release/v1.1/
+  --output     release/v1/metadata.jsonl \
+  --image-dir  release/v1/
 ```
 
 Expected output:
-- `release/v1.1/metadata.jsonl` — 1,026 ladder records
-- `release/v1.1/images/` — 4,104 PNG files (4 per ladder)
+- `release/v1/metadata.jsonl` — 1,026 ladder records
+- `release/v1/images/` — 4,104 PNG files (4 per ladder)
 
 Each record contains: `ladder_id`, `category`, `generator_model`,
 `red_team_model`, `seed`, and `rung_{safe,low_risk,mid_risk,high_risk}` with
