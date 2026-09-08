@@ -1,6 +1,6 @@
-# T2I-Escalate: Terms of Use
+# SafeGrad: Terms of Use
 
-By downloading or using the T2I-Escalate dataset you agree to the following:
+By downloading or using the SafeGrad dataset you agree to the following:
 
 ## 1. Research Use Only
 
@@ -29,8 +29,7 @@ attribution. You must include this terms-of-use document in any redistribution.
 
 ## 4. Attribution
 
-If you use T2I-Escalate in your research, please cite the accompanying paper
-(see README.md for BibTeX).
+If you use SafeGrad in your research, please cite the accompanying paper.
 
 ## 5. No Warranty
 

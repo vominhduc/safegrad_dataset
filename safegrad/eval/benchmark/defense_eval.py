@@ -1,6 +1,6 @@
 """Defense Method Evaluation (Section 4.2, Table 4).
 
-Evaluates nine defense methods from the paper against T2I-Escalate ladders.
+Evaluates nine defense methods from the paper against SafeGrad ladders.
 
 Implemented defenses (Table 4):
   negative_prompt   : Prepend safety-focused negative prompt to generation

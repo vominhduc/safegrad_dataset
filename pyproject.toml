@@ -1,7 +1,8 @@
 [project]
 name = "safegrad"
-version = "0.1.0"
-description = "SafeGrad: Severity-Graded T2I Safety Benchmark"
+version = "1.0.0"
+description = "SafeGrad: A severity-graded benchmark for safety evaluation, defense, and attack of text-to-image models (ASL pipeline)"
+readme = "README.md"
 requires-python = ">=3.11"
 dependencies = [
     "accelerate>=1.13.0",

@@ -1,6 +1,6 @@
 """Attack Success Rate (ASR) Evaluation (Section 4.3, Table 6).
 
-Measures how effectively T2I-Escalate escalation ladders function as
+Measures how effectively SafeGrad escalation ladders function as
 adversarial attacks against T2I safety guardrails.
 
 Two evaluation modes:
@@ -21,7 +21,7 @@ The paper (Table 6) reports ASR for five attack strategies:
 SneakyPrompt, Ring-A-Bell, UnlearnDiffAtk, MMA-Diffusion, and P4D.
 These are specialized adversarial methods that require separate codebases
 and are not re-implemented here.  The ASR metric computed by this module
-treats T2I-Escalate ladders themselves as an attack strategy (Section 4.3).
+treats SafeGrad ladders themselves as an attack strategy (Section 4.3).
 
 Paper reference: Section 4.3, Table 6
 """
