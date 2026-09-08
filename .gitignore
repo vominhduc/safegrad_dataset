@@ -8,3 +8,7 @@ wheels/
 
 # Virtual environments
 .venv
+
+# Run outputs
+logs/
+data/verify_run/

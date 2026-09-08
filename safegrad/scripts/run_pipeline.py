@@ -375,6 +375,10 @@ def parse_args() -> argparse.Namespace:
     p.add_argument("--start-from", default=None, metavar="STAGE",
                    choices=("0", "1", "2a", "2b", "2c", "3", "4"),
                    help="Resume from this stage (0, 1, 2a, 2b, 2c, 3, 4)")
+    p.add_argument("--stop-after", default=None, metavar="STAGE",
+                   choices=("0", "1", "2a", "2b", "2c", "3", "4"),
+                   help="Stop after this stage (inclusive). E.g. '3' skips Stage 4 "
+                        "VLM verification so images can be judged separately.")
 
     return p.parse_args()
 
@@ -420,6 +424,16 @@ def main() -> None:
     pipeline.append(("2c", "Stage 2c: Ladder Quality Scoring"))
     pipeline.append(("3",  "Stage 3: T2I Image Synthesis"))
     pipeline.append(("4",  "Stage 4: VLM Verification"))
+
+    # Truncate the pipeline if --stop-after is given (inclusive).
+    if args.stop_after is not None:
+        stop_ids = [sid for sid, _ in pipeline]
+        if args.stop_after not in stop_ids:
+            log.error("--stop-after %s is not part of this run's stages: %s",
+                      args.stop_after, " → ".join(stop_ids))
+            sys.exit(1)
+        cut = stop_ids.index(args.stop_after) + 1
+        pipeline = pipeline[:cut]
 
     _STAGE_FN_MAP = {
         "0":  lambda a, w, i: run_stage0(a, w),
@@ -529,8 +543,9 @@ def main() -> None:
         )
 
     if summary:
-        last = list(summary.values())[-1]
-        print(f"\n  Final output  : {workdir / 'metadata_stage4.jsonl'}")
+        last_id   = list(summary.keys())[-1]
+        last      = summary[last_id]
+        print(f"\n  Final output  : {workdir / _STAGE_OUTPUT[last_id]}")
         print(f"  Final ladders : {last['output']}")
 
     print(f"\n{DIVIDER}\n")
