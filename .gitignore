@@ -12,3 +12,5 @@ wheels/
 # Run outputs
 logs/
 data/verify_run/
+data/v2_curation/
+data/filter_runs/

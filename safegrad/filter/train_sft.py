@@ -86,6 +86,9 @@ def main() -> None:
     ap.add_argument("--dataset", required=True, help="Ladder JSONL (export of the ASL pipeline)")
     ap.add_argument("--image-root", required=True)
     ap.add_argument("--out", required=True)
+    ap.add_argument("--split-file", default=None,
+                    help="Optional precomputed split.json (e.g. from curate_v2); "
+                         "if absent, an 80/10/10 split is computed from --dataset")
     ap.add_argument("--model", default="Qwen/Qwen2.5-VL-7B-Instruct")
     ap.add_argument("--condition", default="prompt", choices=["prompt", "none"])
     ap.add_argument("--oversample", default=None,
@@ -107,7 +110,12 @@ def main() -> None:
 
     records = load_records(args.dataset)
     categories = sorted({r["category"] for r in records})
-    split = ladder_split(records, args.seed)
+    if args.split_file:
+        with open(args.split_file) as f:
+            split = json.load(f)
+        print(f"loaded external split: {split.get('rule', '')[:120]}", flush=True)
+    else:
+        split = ladder_split(records, args.seed)
     with open(out / "split.json", "w") as f:
         json.dump(split, f, indent=2)
     print(f"ladders: {split['n_ladders']} -> train {len(split['train'])}, "
