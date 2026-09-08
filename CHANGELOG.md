@@ -2,6 +2,12 @@
 
 ## Unreleased (v2)
 
+- Taxonomy: `safegrad.scripts.sync_rules` regenerates `data/rules.jsonl`
+  deterministically from the canonical risk-taxonomy file
+  (`shares/new_risk_category.jsonl`: 19 categories, five-level rules; levels
+  marked "(Does not exist)" are skipped). Rule texts are unchanged; each row
+  now carries its source `risk_id` for provenance.
+
 - `safegrad.filter`: severity-graded safety filter replacing the v1 binary
   YES/NO filter — two-stage training (safety SFT producing a five-level
   structured judgment; then a soft cumulative ordinal head with monotone
