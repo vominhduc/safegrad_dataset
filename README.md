@@ -198,6 +198,38 @@ See [`safegrad/eval/`](safegrad/eval/) for the full experiment suite.
 
 ---
 
+## Severity-graded safety filter (v2)
+
+[`safegrad/filter/`](safegrad/filter/) trains the remediation filter in two stages:
+safety instruction tuning (LoRA) with a structured five-level judgment, then a
+soft cumulative ordinal head + harm-category head on the frozen backbone
+(yields discrete levels and a continuous risk score in [0, 100]).
+Requires the `filter` extra (`uv sync --extra filter`, adds `peft`).
+
+```bash
+# Stage 1 — instruction tuning (GPU; 80/10/10 ladder split, seed 42)
+uv run python -m safegrad.filter.train_sft \
+  --dataset <export>/metadata.jsonl --image-root <export> \
+  --out data/filter_runs/sft
+
+# Stage 2 — ordinal + category heads on the frozen backbone (GPU)
+uv run python -m safegrad.filter.train_heads \
+  --dataset <export>/metadata.jsonl --image-root <export> \
+  --adapter data/filter_runs/sft/adapter_best --out data/filter_runs/heads
+
+# Evaluation — binary Table-6 readout + ordinal metrics on the test split
+uv run python -m safegrad.filter.eval_filter \
+  --dataset <export>/metadata.jsonl --image-root <export> \
+  --split-file data/filter_runs/sft/split.json --split test \
+  --adapter data/filter_runs/sft/adapter_best \
+  --heads data/filter_runs/heads/heads.pt --out data/filter_runs/test_eval.json
+```
+
+Conditioning defaults to the rung's T2I prompt (`--condition prompt`,
+deployment-realistic); `--condition none` audits image-only judgment.
+
+---
+
 ## Environment variables
 
 | Variable | Description |

@@ -88,3 +88,8 @@ All generated data (including images) goes to:
 - ✅ Done: Rewrote `data/rules.jsonl` — 92 rules, 19 categories × 5 levels from `new_risk_category.jsonl`
 - ✅ Done: Updated eval files (`hgr.py`, `exp2_hgr_sbs.py`, `export_metadata.py`) to 5-level support
 - ✅ Done: Submitted SLURM job **4024354** (`safegrad_pipeline`) — expected ~2400–2800 images
+
+### 2026-09-08 (session: v2 filter)
+- ✅ Done: Packaged the v1 pipeline (4-level, paper-matching) as `v1.0.0` on `main` (tag pushed; this branch unchanged).
+- ✅ Done: Added `safegrad/filter/` — the v2 severity-graded filter (SafeAtlas-VL-inspired): stage-1 safety SFT with structured five-level output (`Safety:`/`Categories:`), stage-2 soft cumulative ordinal head (monotone thresholds, Gaussian-smoothed targets, γ=0.75) + category head on the frozen backbone, continuous risk score in [0,100]. Eval keeps the v1 Table-6 binary protocol (val-tuned score threshold) and adds ordinal metrics (acc/macro-F1/within-1/MAE/QWK/Spearman). Conditioning: `--condition prompt` (default, deployment-realistic) or `none`; rung explanations are never shown (label leakage).
+- 📌 Next: smoke-test + dry run; point `--dataset/--image-root` at a 5-level export once Stage 4 of `safegrad_run_v2` finishes (currently only Stages 1–3 + judge outputs exist there).

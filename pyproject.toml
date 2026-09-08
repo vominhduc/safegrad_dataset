@@ -28,6 +28,7 @@ dependencies = [
 
 [project.optional-dependencies]
 toxicity = ["detoxify>=0.3.0"]
+filter = ["peft>=0.13.0"]
 
 [project.scripts]
 safegrad-stage1  = "safegrad.pipeline.stage1_clustering:main"
@@ -36,3 +37,6 @@ safegrad-stage3  = "safegrad.pipeline.stage3_synthesis:main"
 safegrad-stage4  = "safegrad.pipeline.stage4_verification:main"
 safegrad-run     = "safegrad.scripts.run_pipeline:main"
 safegrad-export  = "safegrad.scripts.export_metadata:main"
+safegrad-filter-sft   = "safegrad.filter.train_sft:main"
+safegrad-filter-heads = "safegrad.filter.train_heads:main"
+safegrad-filter-eval  = "safegrad.filter.eval_filter:main"

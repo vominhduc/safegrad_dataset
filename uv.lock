@@ -1482,6 +1482,27 @@ wheels = [
 ]
 
 [[package]]
+name = "peft"
+version = "0.20.0"
+source = { registry = "https://pypi.org/simple" }
+dependencies = [
+    { name = "accelerate" },
+    { name = "huggingface-hub" },
+    { name = "numpy" },
+    { name = "packaging" },
+    { name = "psutil" },
+    { name = "pyyaml" },
+    { name = "safetensors" },
+    { name = "torch" },
+    { name = "tqdm" },
+    { name = "transformers" },
+]
+sdist = { url = "https://files.pythonhosted.org/packages/b4/08/02541a2c29be7c78698f73d438bc0e733b214f3f35ec5db79fca8da8fc61/peft-0.20.0.tar.gz", hash = "sha256:4769c8093a4ca145fd6fb3fd4dd50449675f5fe46434ad1e98b285a132d4b1d0", size = 880503 }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/28/79/13bcabb8048126422d5c4b880575d40886c726f354db88cfeed4325525bb/peft-0.20.0-py3-none-any.whl", hash = "sha256:0fbba16ffebfad3de96e06f2da6860fd860292324b85b6141909fa1e26ea9233", size = 775777 },
+]
+
+[[package]]
 name = "pillow"
 version = "12.2.0"
 source = { registry = "https://pypi.org/simple" }
@@ -2070,6 +2091,9 @@ dependencies = [
 ]
 
 [package.optional-dependencies]
+filter = [
+    { name = "peft" },
+]
 toxicity = [
     { name = "detoxify" },
 ]
@@ -2085,6 +2109,7 @@ requires-dist = [
     { name = "numpy", specifier = ">=2.4.4" },
     { name = "openai", specifier = ">=1.57.0" },
     { name = "pandas", specifier = ">=2.2.0" },
+    { name = "peft", marker = "extra == 'filter'", specifier = ">=0.13.0" },
     { name = "pillow", specifier = ">=10.0.0" },
     { name = "protobuf", specifier = ">=7.34.1" },
     { name = "pyarrow", specifier = ">=24.0.0" },
@@ -2098,7 +2123,7 @@ requires-dist = [
     { name = "tqdm", specifier = ">=4.67.3" },
     { name = "transformers", specifier = ">=4.45.0" },
 ]
-provides-extras = ["toxicity"]
+provides-extras = ["toxicity", "filter"]
 
 [[package]]
 name = "safetensors"
