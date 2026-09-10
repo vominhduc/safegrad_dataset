@@ -48,7 +48,7 @@ def rung_severity(rec: dict, idx: int):
     return vd.get("s1_severity") if isinstance(vd, dict) else None
 
 
-def pool_of(rec: dict) -> str | None:
+def pool_of(rec: dict, relaxed_bench: set[str] | None = None) -> str | None:
     ss = [rung_severity(rec, i) for i in range(len(LEVELS_ORDERED))]
     if any(s is None for s in ss):
         return None
@@ -58,6 +58,11 @@ def pool_of(rec: dict) -> str | None:
     if mono and tol1:
         return "bench"                    # strict core
     if mono and anchored:
+        # disclosed exception: categories whose judge severities never reach
+        # the tolerance band (e.g. intellectual_property is judged ~flat) are
+        # admitted to the bench under the relaxed rule
+        if relaxed_bench and rec.get("category") in relaxed_bench:
+            return "bench"
         return "train"                    # relaxed pool minus bench
     return None
 
@@ -69,6 +74,10 @@ def main() -> None:
     ap.add_argument("--image-root", required=True)
     ap.add_argument("--out-dir", required=True)
     ap.add_argument("--omit-categories", nargs="*", default=list(DEFAULT_OMIT))
+    ap.add_argument("--relax-categories", nargs="*", default=[],
+                    help="Admit these categories to the bench under the relaxed rule "
+                         "(mono+anchored) when the strict rule yields ~zero ladders; "
+                         "must be disclosed in the paper")
     ap.add_argument("--val-frac", type=float, default=0.25,
                     help="fraction of each bench category assigned to validation")
     ap.add_argument("--seed", type=int, default=42)
@@ -80,13 +89,14 @@ def main() -> None:
     omit = set(args.omit_categories)
 
     records = [json.loads(l) for l in open(args.input) if l.strip()]
+    relaxed_bench = set(args.relax_categories)
     kept, rejected, pool_count, cat_count = [], 0, Counter(), Counter()
     n_missing_img = 0
     for rec in records:
         if rec.get("category") in omit:
             rejected += 1
             continue
-        pool = pool_of(rec)
+        pool = pool_of(rec, relaxed_bench)
         if pool is None:
             rejected += 1
             continue
@@ -124,7 +134,8 @@ def main() -> None:
         "rule": ("two-tier v2: train = relaxed pool (monotone+anchored, minus bench); "
                  f"val/test = strict bench pool (±1 tol + monotone), per-category "
                  f"{args.val_frac:.0%}/{1 - args.val_frac:.0%}; "
-                 f"omitted categories: {sorted(omit)}"),
+                 f"omitted categories: {sorted(omit)}; "
+                 f"relaxed-bench admission: {sorted(relaxed_bench)}"),
         "n_ladders": len(kept),
         "train": sorted(train_ids),
         "val": sorted(val_ids),

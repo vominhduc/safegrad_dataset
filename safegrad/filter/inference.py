@@ -24,10 +24,13 @@ def extract_hidden(model, processor, examples, image_root, categories, condition
     feats = []
     model.eval()
     for bi, batch in enumerate(loader):
+        seq_lens = batch.pop("seq_lens")
         level_idx = batch.pop("level_idx")
         batch = {k: v.to(device) for k, v in batch.items()}
         hs = model(**batch, output_hidden_states=True).hidden_states[-1]
-        feats.append(hs[:, -1, :].float().cpu())   # left-padded -> last position is final token
+        last_idx = (seq_lens - 1).to(device)                    # last non-pad token per row
+        row_idx = torch.arange(hs.shape[0], device=device)
+        feats.append(hs[row_idx, last_idx, :].float().cpu())
         if (bi + 1) % 25 == 0:
             print(f"  features {bi + 1}/{len(loader)}", flush=True)
     return torch.cat(feats)

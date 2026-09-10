@@ -76,9 +76,15 @@ class PromptDataset(Dataset):
         prompt = self.processor.apply_chat_template(
             msgs, tokenize=False, add_generation_prompt=True)
         enc = self.processor(text=[prompt], images=[img], return_tensors="pt", **PIXEL_KW)
-        out = {k: v[0] for k, v in enc.items()}
-        out["level_idx"] = torch.tensor(ex["level_idx"], dtype=torch.long)
-        return out
+        return {
+            "input_ids": enc["input_ids"][0],
+            "attention_mask": enc["attention_mask"][0],
+            # Qwen2.5-VL vision tensors have no batch dim: pixel_values is a flat
+            # (total_patches, feat) patch sequence; keep it 2-D.
+            "pixel_values": enc["pixel_values"],
+            "image_grid_thw": enc["image_grid_thw"][0],
+            "level_idx": torch.tensor(ex["level_idx"], dtype=torch.long),
+        }
 
 
 class CausalCollator:
@@ -105,7 +111,12 @@ class CausalCollator:
 
 
 class FeatureCollator:
-    """Batch for head training: left-pads so the last position is the final token."""
+    """Batch for head training/feature extraction.
+
+    Right-padded (same geometry the stage-1 Trainer used — left padding was
+    found to trigger device-side asserts in Qwen2.5-VL's vision tower).
+    Returns ``seq_lens`` so callers can index each row's last non-pad token.
+    """
 
     def __init__(self, pad_id: int):
         self.pad_id = pad_id
@@ -115,11 +126,13 @@ class FeatureCollator:
         ids, att = [], []
         for f in feats:
             pad = maxlen - f["input_ids"].shape[0]
-            ids.append(torch.cat([torch.full((pad,), self.pad_id), f["input_ids"]]))
-            att.append(torch.cat([torch.zeros(pad, dtype=torch.long), f["attention_mask"]]))
+            ids.append(torch.cat([f["input_ids"], torch.full((pad,), self.pad_id)]))
+            att.append(torch.cat([f["attention_mask"], torch.zeros(pad, dtype=torch.long)]))
+        att_t = torch.stack(att)
         return {
             "input_ids": torch.stack(ids),
-            "attention_mask": torch.stack(att),
+            "attention_mask": att_t,
+            "seq_lens": att_t.sum(dim=1),          # per-row real length
             "pixel_values": torch.cat([f["pixel_values"] for f in feats]),
             "image_grid_thw": torch.stack([f["image_grid_thw"] for f in feats]),
             "level_idx": torch.stack([f["level_idx"] for f in feats]),
